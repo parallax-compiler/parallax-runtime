@@ -1,0 +1,1 @@
+/usr/bin/c++ -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/test_vulkan_backend.dir/unit/test_vulkan_backend.cpp.o -o test_vulkan_backend  -Wl,-rpath,/Users/karthikt/parallax-base/parallax-runtime/build ../libparallax-runtime.dylib /opt/homebrew/lib/libvulkan.dylib

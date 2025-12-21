@@ -1,6 +1,8 @@
 #ifndef PARALLAX_RUNTIME_H
 #define PARALLAX_RUNTIME_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
