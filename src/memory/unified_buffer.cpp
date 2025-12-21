@@ -51,6 +51,8 @@ void* MemoryManager::allocate(size_t size) {
     }
     
     buffer->is_mapped = true;
+    buffer->init_dirty_tracking(); // Initialize block-level tracking
+    
     void* ptr = buffer->host_ptr;
     buffers_[ptr] = std::move(buffer);
     
@@ -95,12 +97,90 @@ void MemoryManager::sync(void* ptr, SyncDirection direction) {
     }
 }
 
+void MemoryManager::sync_before_kernel(void* ptr) {
+    auto it = buffers_.find(ptr);
+    if (it == buffers_.end()) {
+        return;
+    }
+    
+    auto* buffer = it->second.get();
+    
+    // Transfer dirty blocks from host to device
+    transfer_dirty_blocks(buffer, SyncDirection::HOST_TO_DEVICE);
+}
+
+void MemoryManager::sync_after_kernel(void* ptr) {
+    auto it = buffers_.find(ptr);
+    if (it == buffers_.end()) {
+        return;
+    }
+    
+    auto* buffer = it->second.get();
+    
+    // Mark all blocks as dirty on device after kernel execution
+    buffer->mark_all_dirty_on_device();
+}
+
 VkBuffer MemoryManager::get_buffer(void* ptr) {
     auto it = buffers_.find(ptr);
     if (it == buffers_.end()) {
         return VK_NULL_HANDLE;
     }
     return it->second->buffer;
+}
+
+void MemoryManager::transfer_dirty_blocks(UnifiedBuffer* buffer, SyncDirection direction) {
+    if (!buffer || buffer->blocks.empty()) {
+        return;
+    }
+    
+    // For now, use simple flush/invalidate for host-coherent memory
+    // In future, implement actual block-by-block transfers for efficiency
+    VkMappedMemoryRange range{};
+    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    range.memory = buffer->memory;
+    range.offset = 0;
+    range.size = VK_WHOLE_SIZE;
+    
+    if (direction == SyncDirection::HOST_TO_DEVICE) {
+        // Check if any blocks need transfer
+        bool needs_transfer = false;
+        for (const auto& block : buffer->blocks) {
+            if (block.needs_host_to_device()) {
+                needs_transfer = true;
+                break;
+            }
+        }
+        
+        if (needs_transfer) {
+            vkFlushMappedMemoryRanges(backend_->device(), 1, &range);
+            // Clear dirty flags
+            for (auto& block : buffer->blocks) {
+                if (block.needs_host_to_device()) {
+                    block.clear_dirty();
+                }
+            }
+        }
+    } else {
+        // Device to host
+        bool needs_transfer = false;
+        for (const auto& block : buffer->blocks) {
+            if (block.needs_device_to_host()) {
+                needs_transfer = true;
+                break;
+            }
+        }
+        
+        if (needs_transfer) {
+            vkInvalidateMappedMemoryRanges(backend_->device(), 1, &range);
+            // Clear dirty flags
+            for (auto& block : buffer->blocks) {
+                if (block.needs_device_to_host()) {
+                    block.clear_dirty();
+                }
+            }
+        }
+    }
 }
 
 bool MemoryManager::create_buffer(size_t size, VkBuffer& buffer, VkDeviceMemory& memory, void*& mapped_ptr) {
