@@ -74,6 +74,12 @@ KernelLauncher::~KernelLauncher() {
 }
 
 bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_code, size_t spirv_size) {
+    // Debug: Dump first 20 words
+    std::cerr << "SPIR-V Dump for " << name << " (" << spirv_size << " bytes):" << std::endl;
+    for (size_t i = 0; i < std::min(size_t(20), spirv_size / 4); i++) {
+        std::cerr << "  [" << i << "] 0x" << std::hex << spirv_code[i] << std::dec << std::endl;
+    }
+
     // Create shader module
     VkShaderModuleCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
