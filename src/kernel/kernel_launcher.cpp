@@ -260,4 +260,9 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     return true;
 }
 
+bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t count) {
+    // Reuse specific implementation with dummy multiplier
+    return launch(kernel_name, buffer, count, 1.0f);
+}
+
 } // namespace parallax
