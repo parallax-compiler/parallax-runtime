@@ -6,7 +6,7 @@ CXX_DEFINES = -DPARALLAX_ENABLE_VALIDATION -Dparallax_runtime_EXPORTS
 
 CXX_INCLUDES = -I/Users/karthikt/parallax-base/parallax-runtime/include -I/Users/karthikt/parallax-base/parallax-runtime/src -isystem /opt/homebrew/include
 
-CXX_FLAGSarm64 = -O3 -DNDEBUG -std=gnu++20 -arch arm64 -fPIC
+CXX_FLAGSarm64 = -std=gnu++20 -arch arm64 -fPIC
 
-CXX_FLAGS = -O3 -DNDEBUG -std=gnu++20 -arch arm64 -fPIC
+CXX_FLAGS = -std=gnu++20 -arch arm64 -fPIC
 

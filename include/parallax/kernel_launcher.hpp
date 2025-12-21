@@ -24,8 +24,11 @@ public:
     // Load SPIR-V kernel with name
     bool load_kernel(const std::string& name, const uint32_t* spirv_code, size_t spirv_size);
     
-    // Launch kernel by name
+    // Launch kernel by name (vector_multiply specific)
     bool launch(const std::string& kernel_name, void* buffer, size_t count, float multiplier);
+
+    // Generic launch (buffer + count)
+    bool launch(const std::string& kernel_name, void* buffer, size_t count);
     
 private:
     VulkanBackend* backend_;
