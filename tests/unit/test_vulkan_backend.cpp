@@ -6,26 +6,16 @@ int main() {
     std::cout << "Parallax Vulkan Backend Test" << std::endl;
     std::cout << "=============================" << std::endl;
     
-    // Check for MoltenVK ICD on macOS
-#ifdef __APPLE__
-    const char* vk_icd = std::getenv("VK_ICD_FILENAMES");
-    if (!vk_icd) {
-        std::cout << "\nNote: VK_ICD_FILENAMES not set. Setting to MoltenVK..." << std::endl;
-        setenv("VK_ICD_FILENAMES", "/opt/homebrew/share/vulkan/icd.d/MoltenVK_icd.json", 1);
-    } else {
-        std::cout << "\nVK_ICD_FILENAMES: " << vk_icd << std::endl;
-    }
-#endif
-    
     parallax::VulkanBackend backend;
     
     if (!backend.initialize()) {
-        std::cerr << "\n❌ Failed to initialize Vulkan backend" << std::endl;
+        std::cerr << "\n❌ Vulkan backend unavailable" << std::endl;
         std::cerr << "\nThis is expected on systems without Vulkan support." << std::endl;
-        std::cerr << "The runtime will fall back to CPU execution." << std::endl;
-        std::cerr << "\nTo enable GPU acceleration on macOS:" << std::endl;
-        std::cerr << "  1. Install MoltenVK: brew install molten-vk" << std::endl;
-        std::cerr << "  2. Set environment: export VK_ICD_FILENAMES=/opt/homebrew/share/vulkan/icd.d/MoltenVK_icd.json" << std::endl;
+        std::cerr << "Parallax will automatically fall back to CPU execution." << std::endl;
+        std::cerr << "\nTo enable GPU acceleration:" << std::endl;
+        std::cerr << "  - Linux: Install vulkan-icd-loader and GPU drivers" << std::endl;
+        std::cerr << "  - macOS: Install MoltenVK (brew install molten-vk)" << std::endl;
+        std::cerr << "  - Windows: Install Vulkan SDK from vulkan.lunarg.com" << std::endl;
         return 0; // Not a failure - just no GPU
     }
     
@@ -36,6 +26,8 @@ int main() {
               << "." << VK_API_VERSION_MINOR(backend.api_version())
               << "." << VK_API_VERSION_PATCH(backend.api_version()) << std::endl;
     std::cout << "  Compute Queue Family: " << backend.compute_queue_family() << std::endl;
+    
+    std::cout << "\nParallax will automatically use this GPU for std::execution::par" << std::endl;
     
     return 0;
 }

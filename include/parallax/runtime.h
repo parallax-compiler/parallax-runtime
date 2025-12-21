@@ -15,7 +15,6 @@ typedef struct parallax_kernel* parallax_kernel_t;
 /* Memory management */
 void* parallax_umalloc(size_t size, unsigned flags);
 void parallax_ufree(void* ptr);
-void parallax_sync(void* ptr, int direction);
 
 /* Kernel execution */
 parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words);
