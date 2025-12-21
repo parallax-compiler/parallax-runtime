@@ -1,4 +1,5 @@
 #include "parallax/runtime.hpp"
+#include "parallax/runtime.h"
 #include "parallax/unified_buffer.hpp"
 #include "parallax/vulkan_backend.hpp"
 #include <cstdlib>
