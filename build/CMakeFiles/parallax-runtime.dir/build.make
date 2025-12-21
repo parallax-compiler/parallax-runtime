@@ -114,10 +114,24 @@ CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/karthikt/parallax-base/parallax-runtime/src/kernel/cache.cpp -o CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.s
 
+CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o: CMakeFiles/parallax-runtime.dir/flags.make
+CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o: /Users/karthikt/parallax-base/parallax-runtime/src/kernel/kernel_launcher.cpp
+CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o: CMakeFiles/parallax-runtime.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o -MF CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o.d -o CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o -c /Users/karthikt/parallax-base/parallax-runtime/src/kernel/kernel_launcher.cpp
+
+CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /Users/karthikt/parallax-base/parallax-runtime/src/kernel/kernel_launcher.cpp > CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.i
+
+CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /Users/karthikt/parallax-base/parallax-runtime/src/kernel/kernel_launcher.cpp -o CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.s
+
 CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o: CMakeFiles/parallax-runtime.dir/flags.make
 CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o: /Users/karthikt/parallax-base/parallax-runtime/src/backend/vulkan/device.cpp
 CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o: CMakeFiles/parallax-runtime.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o -MF CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o.d -o CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o -c /Users/karthikt/parallax-base/parallax-runtime/src/backend/vulkan/device.cpp
 
 CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.i: cmake_force
@@ -133,6 +147,7 @@ parallax__runtime_OBJECTS = \
 "CMakeFiles/parallax-runtime.dir/src/memory/unified_allocator.cpp.o" \
 "CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.o" \
 "CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.o" \
+"CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o" \
 "CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o"
 
 # External object files for target parallax-runtime
@@ -141,11 +156,12 @@ parallax__runtime_EXTERNAL_OBJECTS =
 libparallax-runtime.dylib: CMakeFiles/parallax-runtime.dir/src/memory/unified_allocator.cpp.o
 libparallax-runtime.dylib: CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.o
 libparallax-runtime.dylib: CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.o
+libparallax-runtime.dylib: CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o
 libparallax-runtime.dylib: CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o
 libparallax-runtime.dylib: CMakeFiles/parallax-runtime.dir/build.make
 libparallax-runtime.dylib: /opt/homebrew/lib/libvulkan.dylib
 libparallax-runtime.dylib: CMakeFiles/parallax-runtime.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Linking CXX shared library libparallax-runtime.dylib"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CXX shared library libparallax-runtime.dylib"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/parallax-runtime.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

@@ -17,6 +17,7 @@ set(RUNTIME_SOURCES
     src/memory/unified_allocator.cpp
     src/memory/unified_buffer.cpp
     src/kernel/cache.cpp
+    src/kernel/kernel_launcher.cpp
     src/backend/vulkan/device.cpp
 )
 

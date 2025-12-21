@@ -5,9 +5,9 @@
 #include <memory>
 #include <iostream>
 
-// Global runtime state
-static std::unique_ptr<parallax::VulkanBackend> g_backend;
-static std::unique_ptr<parallax::MemoryManager> g_memory_manager;
+// Global runtime state (exposed for testing)
+std::unique_ptr<parallax::VulkanBackend> g_backend;
+std::unique_ptr<parallax::MemoryManager> g_memory_manager;
 static bool g_initialized = false;
 
 static bool ensure_initialized() {
@@ -40,4 +40,3 @@ void parallax_ufree(void* ptr) {
         std::free(ptr);
     }
 }
-

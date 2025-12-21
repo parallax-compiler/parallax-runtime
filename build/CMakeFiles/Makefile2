@@ -107,12 +107,12 @@ tests/clean: tests/CMakeFiles/test_vulkan_backend.dir/clean
 CMakeFiles/parallax-runtime.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=1,2,3,4,5 "Built target parallax-runtime"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=1,2,3,4,5,6 "Built target parallax-runtime"
 .PHONY : CMakeFiles/parallax-runtime.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/parallax-runtime.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles 5
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles 6
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/parallax-runtime.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles 0
 .PHONY : CMakeFiles/parallax-runtime.dir/rule
@@ -124,7 +124,7 @@ parallax-runtime: CMakeFiles/parallax-runtime.dir/rule
 # codegen rule for target.
 CMakeFiles/parallax-runtime.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=1,2,3,4,5 "Finished codegen for target parallax-runtime"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=1,2,3,4,5,6 "Finished codegen for target parallax-runtime"
 .PHONY : CMakeFiles/parallax-runtime.dir/codegen
 
 # clean rule for target.
@@ -139,12 +139,12 @@ CMakeFiles/parallax-runtime.dir/clean:
 tests/CMakeFiles/test_vulkan_backend.dir/all: CMakeFiles/parallax-runtime.dir/all
 	$(MAKE) $(MAKESILENT) -f tests/CMakeFiles/test_vulkan_backend.dir/build.make tests/CMakeFiles/test_vulkan_backend.dir/depend
 	$(MAKE) $(MAKESILENT) -f tests/CMakeFiles/test_vulkan_backend.dir/build.make tests/CMakeFiles/test_vulkan_backend.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=6,7 "Built target test_vulkan_backend"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=7,8 "Built target test_vulkan_backend"
 .PHONY : tests/CMakeFiles/test_vulkan_backend.dir/all
 
 # Build rule for subdir invocation for target.
 tests/CMakeFiles/test_vulkan_backend.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles 7
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles 8
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 tests/CMakeFiles/test_vulkan_backend.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles 0
 .PHONY : tests/CMakeFiles/test_vulkan_backend.dir/rule
@@ -156,7 +156,7 @@ test_vulkan_backend: tests/CMakeFiles/test_vulkan_backend.dir/rule
 # codegen rule for target.
 tests/CMakeFiles/test_vulkan_backend.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f tests/CMakeFiles/test_vulkan_backend.dir/build.make tests/CMakeFiles/test_vulkan_backend.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=6,7 "Finished codegen for target test_vulkan_backend"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/karthikt/parallax-base/parallax-runtime/build/CMakeFiles --progress-num=7,8 "Finished codegen for target test_vulkan_backend"
 .PHONY : tests/CMakeFiles/test_vulkan_backend.dir/codegen
 
 # clean rule for target.

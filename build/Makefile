@@ -245,6 +245,30 @@ src/kernel/cache.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.s
 .PHONY : src/kernel/cache.cpp.s
 
+src/kernel/kernel_launcher.o: src/kernel/kernel_launcher.cpp.o
+.PHONY : src/kernel/kernel_launcher.o
+
+# target to build an object file
+src/kernel/kernel_launcher.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.o
+.PHONY : src/kernel/kernel_launcher.cpp.o
+
+src/kernel/kernel_launcher.i: src/kernel/kernel_launcher.cpp.i
+.PHONY : src/kernel/kernel_launcher.i
+
+# target to preprocess a source file
+src/kernel/kernel_launcher.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.i
+.PHONY : src/kernel/kernel_launcher.cpp.i
+
+src/kernel/kernel_launcher.s: src/kernel/kernel_launcher.cpp.s
+.PHONY : src/kernel/kernel_launcher.s
+
+# target to generate assembly for a file
+src/kernel/kernel_launcher.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/kernel/kernel_launcher.cpp.s
+.PHONY : src/kernel/kernel_launcher.cpp.s
+
 src/memory/unified_allocator.o: src/memory/unified_allocator.cpp.o
 .PHONY : src/memory/unified_allocator.o
 
@@ -314,6 +338,9 @@ help:
 	@echo "... src/kernel/cache.o"
 	@echo "... src/kernel/cache.i"
 	@echo "... src/kernel/cache.s"
+	@echo "... src/kernel/kernel_launcher.o"
+	@echo "... src/kernel/kernel_launcher.i"
+	@echo "... src/kernel/kernel_launcher.s"
 	@echo "... src/memory/unified_allocator.o"
 	@echo "... src/memory/unified_allocator.i"
 	@echo "... src/memory/unified_allocator.s"
