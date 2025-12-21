@@ -1,12 +1,3 @@
-#ifndef PARALLAX_SHADERS_VECTOR_MULTIPLY_HPP
-#define PARALLAX_SHADERS_VECTOR_MULTIPLY_HPP
-
-#include <cstdint>
-#include <cstddef>
-
-namespace parallax {
-namespace shaders {
-
 alignas(4) static const uint32_t VECTOR_MULTIPLY_SPV[] = {
   0x03, 0x02, 0x23, 0x07, 0x00, 0x06, 0x01, 0x00, 0x0b, 0x00, 0x0d, 0x00,
   0x2f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x00, 0x02, 0x00,
@@ -121,8 +112,3 @@ alignas(4) static const uint32_t VECTOR_MULTIPLY_SPV[] = {
   0x38, 0x00, 0x01, 0x00
 };
 static const size_t VECTOR_MULTIPLY_SPV_SIZE = 1324;
-
-} // namespace shaders
-} // namespace parallax
-
-#endif // PARALLAX_SHADERS_VECTOR_MULTIPLY_HPP

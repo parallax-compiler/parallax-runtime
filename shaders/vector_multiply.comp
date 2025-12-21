@@ -2,22 +2,19 @@
 
 layout(local_size_x = 256) in;
 
-layout(std430, binding = 0) buffer InputBuffer {
+// Single buffer for in-place modification
+layout(std430, binding = 0) buffer DataBuffer {
     float data[];
-} input_buf;
-
-layout(std430, binding = 1) buffer OutputBuffer {
-    float data[];
-} output_buf;
+};
 
 layout(push_constant) uniform PushConstants {
     uint count;
     float multiplier;
-} constants;
+} pc;
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
-    if (idx < constants.count) {
-        output_buf.data[idx] = input_buf.data[idx] * constants.multiplier;
+    if (idx < pc.count) {
+        data[idx] *= pc.multiplier;
     }
 }
