@@ -7,6 +7,12 @@
 },
 {
   "directory": "/Users/karthikt/parallax-base/parallax-runtime/build",
+  "command": "/usr/bin/c++ -DPARALLAX_ENABLE_VALIDATION -Dparallax_runtime_EXPORTS -I/Users/karthikt/parallax-base/parallax-runtime/include -I/Users/karthikt/parallax-base/parallax-runtime/src -isystem /opt/homebrew/include -g -std=gnu++20 -arch arm64 -fPIC -o CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.o -c /Users/karthikt/parallax-base/parallax-runtime/src/memory/unified_buffer.cpp",
+  "file": "/Users/karthikt/parallax-base/parallax-runtime/src/memory/unified_buffer.cpp",
+  "output": "CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.o"
+},
+{
+  "directory": "/Users/karthikt/parallax-base/parallax-runtime/build",
   "command": "/usr/bin/c++ -DPARALLAX_ENABLE_VALIDATION -Dparallax_runtime_EXPORTS -I/Users/karthikt/parallax-base/parallax-runtime/include -I/Users/karthikt/parallax-base/parallax-runtime/src -isystem /opt/homebrew/include -g -std=gnu++20 -arch arm64 -fPIC -o CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.o -c /Users/karthikt/parallax-base/parallax-runtime/src/kernel/cache.cpp",
   "file": "/Users/karthikt/parallax-base/parallax-runtime/src/kernel/cache.cpp",
   "output": "CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.o"

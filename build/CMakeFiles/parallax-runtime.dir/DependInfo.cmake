@@ -11,6 +11,7 @@ set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/Users/karthikt/parallax-base/parallax-runtime/src/backend/vulkan/device.cpp" "CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o" "gcc" "CMakeFiles/parallax-runtime.dir/src/backend/vulkan/device.cpp.o.d"
   "/Users/karthikt/parallax-base/parallax-runtime/src/kernel/cache.cpp" "CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.o" "gcc" "CMakeFiles/parallax-runtime.dir/src/kernel/cache.cpp.o.d"
   "/Users/karthikt/parallax-base/parallax-runtime/src/memory/unified_allocator.cpp" "CMakeFiles/parallax-runtime.dir/src/memory/unified_allocator.cpp.o" "gcc" "CMakeFiles/parallax-runtime.dir/src/memory/unified_allocator.cpp.o.d"
+  "/Users/karthikt/parallax-base/parallax-runtime/src/memory/unified_buffer.cpp" "CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.o" "gcc" "CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

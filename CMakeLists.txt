@@ -15,6 +15,7 @@ find_package(Vulkan 1.3 REQUIRED)
 # Library sources
 set(RUNTIME_SOURCES
     src/memory/unified_allocator.cpp
+    src/memory/unified_buffer.cpp
     src/kernel/cache.cpp
     src/backend/vulkan/device.cpp
 )

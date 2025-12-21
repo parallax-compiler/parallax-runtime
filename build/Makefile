@@ -269,6 +269,30 @@ src/memory/unified_allocator.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/memory/unified_allocator.cpp.s
 .PHONY : src/memory/unified_allocator.cpp.s
 
+src/memory/unified_buffer.o: src/memory/unified_buffer.cpp.o
+.PHONY : src/memory/unified_buffer.o
+
+# target to build an object file
+src/memory/unified_buffer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.o
+.PHONY : src/memory/unified_buffer.cpp.o
+
+src/memory/unified_buffer.i: src/memory/unified_buffer.cpp.i
+.PHONY : src/memory/unified_buffer.i
+
+# target to preprocess a source file
+src/memory/unified_buffer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.i
+.PHONY : src/memory/unified_buffer.cpp.i
+
+src/memory/unified_buffer.s: src/memory/unified_buffer.cpp.s
+.PHONY : src/memory/unified_buffer.s
+
+# target to generate assembly for a file
+src/memory/unified_buffer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/parallax-runtime.dir/build.make CMakeFiles/parallax-runtime.dir/src/memory/unified_buffer.cpp.s
+.PHONY : src/memory/unified_buffer.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -293,6 +317,9 @@ help:
 	@echo "... src/memory/unified_allocator.o"
 	@echo "... src/memory/unified_allocator.i"
 	@echo "... src/memory/unified_allocator.s"
+	@echo "... src/memory/unified_buffer.o"
+	@echo "... src/memory/unified_buffer.i"
+	@echo "... src/memory/unified_buffer.s"
 .PHONY : help
 
 
