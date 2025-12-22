@@ -169,6 +169,11 @@ bool VulkanBackend::create_logical_device() {
     float queue_priority = 1.0f;
     queue_create_info.pQueuePriorities = &queue_priority;
     
+    VkPhysicalDeviceVulkan11Features vulkan11_features{};
+    vulkan11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+    vulkan11_features.variablePointersStorageBuffer = VK_TRUE;
+    vulkan11_features.variablePointers = VK_TRUE;
+
     VkPhysicalDeviceFeatures device_features{};
     
     // Extensions for MoltenVK
@@ -179,6 +184,7 @@ bool VulkanBackend::create_logical_device() {
     
     VkDeviceCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    create_info.pNext = &vulkan11_features;
     create_info.pQueueCreateInfos = &queue_create_info;
     create_info.queueCreateInfoCount = 1;
     create_info.pEnabledFeatures = &device_features;
