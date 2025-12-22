@@ -19,6 +19,7 @@ void parallax_ufree(void* ptr);
 /* Kernel execution */
 parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words);
 void parallax_kernel_launch(parallax_kernel_t kernel, ...);
+void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...);
 
 #ifdef __cplusplus
 }

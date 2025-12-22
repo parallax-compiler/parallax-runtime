@@ -29,6 +29,12 @@ public:
 
     // Generic launch (buffer + count)
     bool launch(const std::string& kernel_name, void* buffer, size_t count);
+
+    // Transform launch (in/out buffers + count)
+    bool launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count);
+    
+    // Synchronize all pending operations
+    void sync();
     
 private:
     VulkanBackend* backend_;
@@ -37,10 +43,26 @@ private:
     // Pipeline cache
     std::unordered_map<std::string, PipelineData> pipelines_;
     
+    // Descriptor Set Cache: key is (descriptor_set_layout, buffer_ptr)
+    struct CacheKey {
+        VkDescriptorSetLayout layout;
+        void* buffer;
+        bool operator==(const CacheKey& other) const {
+            return layout == other.layout && buffer == other.buffer;
+        }
+    };
+    struct CacheHash {
+        std::size_t operator()(const CacheKey& k) const {
+            return std::hash<void*>{}(k.buffer) ^ (std::hash<uint64_t>{}((uint64_t)k.layout) << 1);
+        }
+    };
+    std::unordered_map<CacheKey, VkDescriptorSet, CacheHash> descriptor_cache_;
+    
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkCommandPool command_pool_ = VK_NULL_HANDLE;
     VkCommandBuffer command_buffer_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
+    bool fence_signaled_ = true;
 };
 
 } // namespace parallax

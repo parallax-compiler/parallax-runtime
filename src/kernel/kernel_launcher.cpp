@@ -11,13 +11,13 @@ KernelLauncher::KernelLauncher(VulkanBackend* backend, MemoryManager* memory_man
     // Create descriptor pool
     VkDescriptorPoolSize pool_size{};
     pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    pool_size.descriptorCount = 16; // Support up to 16 buffers
+    pool_size.descriptorCount = 2048; // Support more buffers/sets
     
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.poolSizeCount = 1;
     pool_info.pPoolSizes = &pool_size;
-    pool_info.maxSets = 16;
+    pool_info.maxSets = 1024;
     pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     
     if (vkCreateDescriptorPool(backend_->device(), &pool_info, nullptr, &descriptor_pool_) != VK_SUCCESS) {
@@ -93,17 +93,19 @@ bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_
         return false;
     }
     
-    // Create descriptor set layout (1 storage buffer binding)
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Create descriptor set layout (Up to 2 storage buffer bindings for in/out)
+    std::vector<VkDescriptorSetLayoutBinding> bindings(2);
+    for (int i = 0; i < 2; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
     
     VkDescriptorSetLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = 1;
-    layout_info.pBindings = &binding;
+    layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
+    layout_info.pBindings = bindings.data();
     
     VkDescriptorSetLayout descriptor_set_layout;
     if (vkCreateDescriptorSetLayout(backend_->device(), &layout_info, nullptr, &descriptor_set_layout) != VK_SUCCESS) {
@@ -186,17 +188,23 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     // Sync dirty blocks before kernel
     memory_manager_->sync_before_kernel(buffer);
     
-    // Allocate descriptor set
-    VkDescriptorSetAllocateInfo alloc_info{};
-    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    alloc_info.descriptorPool = descriptor_pool_;
-    alloc_info.descriptorSetCount = 1;
-    alloc_info.pSetLayouts = &pipeline_data.descriptor_set_layout;
-    
+    // Check descriptor cache
+    CacheKey key{pipeline_data.descriptor_set_layout, buffer};
     VkDescriptorSet descriptor_set;
-    if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
-        std::cerr << "Failed to allocate descriptor set" << std::endl;
-        return false;
+    if (descriptor_cache_.count(key)) {
+        descriptor_set = descriptor_cache_[key];
+    } else {
+        // Allocate descriptor set
+        VkDescriptorSetAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc_info.descriptorPool = descriptor_pool_;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &pipeline_data.descriptor_set_layout;
+        
+        if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
+            std::cerr << "Failed to allocate descriptor set" << std::endl;
+            return false;
+        }
     }
     
     // Update descriptor set
@@ -215,9 +223,10 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     write.pBufferInfo = &buffer_info;
     
     vkUpdateDescriptorSets(backend_->device(), 1, &write, 0, nullptr);
+    descriptor_cache_[key] = descriptor_set;
     
-    // Wait for previous operations
-    vkWaitForFences(backend_->device(), 1, &fence_, VK_TRUE, UINT64_MAX);
+    // Wait for previous operations if any
+    sync();
     vkResetFences(backend_->device(), 1, &fence_);
     
     // Record command buffer
@@ -251,25 +260,135 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     
     if (vkQueueSubmit(backend_->compute_queue(), 1, &submit_info, fence_) != VK_SUCCESS) {
         std::cerr << "Failed to submit command buffer" << std::endl;
-        vkFreeDescriptorSets(backend_->device(), descriptor_pool_, 1, &descriptor_set);
         return false;
     }
     
-    // Wait for completion
-    vkWaitForFences(backend_->device(), 1, &fence_, VK_TRUE, UINT64_MAX);
+    fence_signaled_ = false;
     
-    // Sync after kernel
-    memory_manager_->sync_after_kernel(buffer);
-    
-    // Free descriptor set
-    vkFreeDescriptorSets(backend_->device(), descriptor_pool_, 1, &descriptor_set);
+    // NOTE: sync_after_kernel is removed to avoid host-device roundtrip.
+    // User must call sync() explicitly if they want to access the buffer.
     
     return true;
+}
+
+void KernelLauncher::sync() {
+    if (!fence_signaled_) {
+        vkWaitForFences(backend_->device(), 1, &fence_, VK_TRUE, UINT64_MAX);
+        fence_signaled_ = true;
+    }
 }
 
 bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t count) {
     // Reuse specific implementation with dummy multiplier
     return launch(kernel_name, buffer, count, 1.0f);
+}
+
+bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count) {
+    auto it = pipelines_.find(kernel_name);
+    if (it == pipelines_.end()) {
+        std::cerr << "Kernel not found: " << kernel_name << std::endl;
+        return false;
+    }
+    
+    auto& pipeline_data = it->second;
+    
+    // Get Vulkan buffers
+    VkBuffer vk_in = memory_manager_->get_buffer(in_buffer);
+    VkBuffer vk_out = memory_manager_->get_buffer(out_buffer);
+    
+    if (vk_in == VK_NULL_HANDLE || vk_out == VK_NULL_HANDLE) {
+        std::cerr << "Invalid buffers" << std::endl;
+        return false;
+    }
+    
+    // Sync dirty blocks before kernel
+    memory_manager_->sync_before_kernel(in_buffer);
+    memory_manager_->sync_before_kernel(out_buffer);
+    
+    // Check descriptor cache (multi-buffer key is complex, for MVP we use a simple combination)
+    // Actually, for transform we have 2 buffers. We'll use the out_buffer as the key part for now
+    // or better, a combined key. For now, let's just use the out_buffer since layout is fixed.
+    CacheKey key{pipeline_data.descriptor_set_layout, out_buffer};
+    VkDescriptorSet descriptor_set;
+    if (descriptor_cache_.count(key)) {
+        descriptor_set = descriptor_cache_[key];
+    } else {
+        // Allocate descriptor set
+        VkDescriptorSetAllocateInfo alloc_info{};
+        alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc_info.descriptorPool = descriptor_pool_;
+        alloc_info.descriptorSetCount = 1;
+        alloc_info.pSetLayouts = &pipeline_data.descriptor_set_layout;
+        
+        if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
+            std::cerr << "Failed to allocate descriptor set" << std::endl;
+            return false;
+        }
+        
+        // Update descriptor set (2 buffers)
+        std::vector<VkDescriptorBufferInfo> buffer_infos(2);
+        buffer_infos[0].buffer = vk_in;
+        buffer_infos[0].offset = 0;
+        buffer_infos[0].range = VK_WHOLE_SIZE;
+        
+        buffer_infos[1].buffer = vk_out;
+        buffer_infos[1].offset = 0;
+        buffer_infos[1].range = VK_WHOLE_SIZE;
+        
+        std::vector<VkWriteDescriptorSet> writes(2);
+        for (int i = 0; i < 2; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = descriptor_set;
+            writes[i].dstBinding = i;
+            writes[i].dstArrayElement = 0;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].descriptorCount = 1;
+            writes[i].pBufferInfo = &buffer_infos[i];
+        }
+        
+        vkUpdateDescriptorSets(backend_->device(), 2, writes.data(), 0, nullptr);
+        descriptor_cache_[key] = descriptor_set;
+    }
+    
+    // Wait for previous operations if any
+    sync();
+    vkResetFences(backend_->device(), 1, &fence_);
+    
+    // Record command buffer (same logic as launch)
+    vkResetCommandBuffer(command_buffer_, 0);
+    
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    
+    vkBeginCommandBuffer(command_buffer_, &begin_info);
+    
+    vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
+    vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
+    
+    // Push constants: count
+    uint32_t push_data[4] = {static_cast<uint32_t>(count), 0, 0, 0};
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_data), push_data);
+    
+    // Dispatch
+    uint32_t workgroup_count = (count + 255) / 256;
+    vkCmdDispatch(command_buffer_, workgroup_count, 1, 1);
+    
+    vkEndCommandBuffer(command_buffer_);
+    
+    // Submit
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer_;
+    
+    if (vkQueueSubmit(backend_->compute_queue(), 1, &submit_info, fence_) != VK_SUCCESS) {
+        std::cerr << "Failed to submit command buffer" << std::endl;
+        return false;
+    }
+    
+    fence_signaled_ = false;
+    return true;
 }
 
 } // namespace parallax
