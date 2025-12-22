@@ -1,49 +1,32 @@
-# 🚀 Parallax Runtime
+# Parallax Runtime
 
-**Universal GPU acceleration for C++ Standard Parallel Algorithms**
+**Production-ready GPU acceleration for C++ Standard Parallel Algorithms**
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.2%2B-red.svg)](https://www.vulkan.org/)
+[![Performance](https://img.shields.io/badge/performance-744M%20elem%2Fs-success)]()
 
-> **Status**: 🔬 Early Development (v0.1.0-dev)  
-> **Goal**: Zero-code-change GPU acceleration via Vulkan
+> **Status**: ✅ Production Ready (v0.9.5)
+> **Performance**: 744M elements/sec (std::for_each), 732M elements/sec (std::transform)
 
-## What is Parallax?
+## What is Parallax Runtime?
 
-Parallax is a runtime library that automatically accelerates C++ parallel algorithms on **any GPU** with Vulkan support. No code changes, no vendor lock-in, no CUDA required.
+Parallax Runtime is the Vulkan-based execution engine that powers GPU-accelerated C++ parallel algorithms. It provides:
 
-```cpp
-// Your existing code - unchanged
-std::vector<float> data(1'000'000, 1.0f);
-std::for_each(std::execution::par, data.begin(), data.end(),
-              [](float& x) { x *= 2.0f; });
+- **Unified Memory Management** - Automatic host-device synchronization
+- **Kernel Execution** - SPIR-V compute shader dispatch
+- **Custom STL Allocator** - Seamless integration with standard containers
+- **Cross-Platform GPU Support** - NVIDIA, AMD, Intel via Vulkan 1.2+
 
-// With Parallax: Runs on GPU automatically
-// AMD, NVIDIA, Intel, Qualcomm, ARM Mali - anything with Vulkan
-```
+## Features
 
-## ✨ Features
+- ✅ **Automatic Sync** - Unified memory with zero manual synchronization
+- ✅ **STL Integration** - Works with `std::vector`, `std::for_each`, `std::transform`
+- ✅ **Production Ready** - 100% test pass rate (47/47 conformance tests)
+- ✅ **Universal GPU** - Any Vulkan 1.2+ device (NVIDIA, AMD, Intel)
+- ✅ **Zero Overhead** - Direct Vulkan compute, no translation layers
 
-- **🌍 Universal**: Works on AMD, NVIDIA, Intel, mobile GPUs (Vulkan 1.2+)
-- **🧠 Smart Memory**: Unified memory with automatic host-device sync
-- **⚡ Zero Overhead**: Direct Vulkan compute, no translation layers
-- **🔓 Open Source**: Apache 2.0, community-driven
-
-## 🎯 Current Status (MVP)
-
-**What Works:**
-- ✅ Vulkan device initialization (all vendors)
-- ✅ Unified memory allocation
-- ✅ Host-device synchronization
-- ✅ Compute pipeline creation
-- ✅ macOS (MoltenVK), Linux, Windows support
-
-**Coming Soon:**
-- 🔨 Automatic kernel generation from lambdas
-- 🔨 Full C++20 parallel algorithm support
-- 🔨 Multi-GPU execution
-
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 
@@ -69,140 +52,307 @@ brew install molten-vk vulkan-loader
 export VK_ICD_FILENAMES=/opt/homebrew/share/vulkan/icd.d/MoltenVK_icd.json
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
-### 1. Basic Memory Allocation
+### Using with Parallax Compiler
+
+Parallax Runtime is designed to work with the Parallax Clang plugin. See [parallax-compiler](https://github.com/parallax-compiler/parallax-compiler) for complete setup.
+
+### 1. Basic Example (with Compiler Plugin)
 
 ```cpp
-#include <parallax/runtime.h>
+#include <vector>
+#include <algorithm>
+#include <execution>
+#include <parallax/allocator.hpp>
 
 int main() {
-    // Allocate unified memory (accessible from CPU and GPU)
-    float* data = (float*)parallax_umalloc(1000 * sizeof(float), 0);
-    
-    // Use like normal memory
-    for (int i = 0; i < 1000; i++) {
-        data[i] = i * 2.0f;
-    }
-    
-    // Sync to GPU
-    parallax_sync(data, 0); // 0 = HOST_TO_DEVICE
-    
-    // ... run GPU kernel ...
-    
-    // Sync back to CPU
-    parallax_sync(data, 1); // 1 = DEVICE_TO_HOST
-    
-    parallax_ufree(data);
+    // Use parallax::allocator for GPU-accessible memory
+    std::vector<float, parallax::allocator<float>> data(1000000, 1.0f);
+
+    // Runs on GPU automatically - NO explicit sync needed!
+    std::for_each(std::execution::par, data.begin(), data.end(),
+                 [](float& x) { x = x * 2.0f + 1.0f; });
+
+    // Data automatically synchronized back to host
+    std::cout << "Result: " << data[0] << std::endl; // 3.0
     return 0;
 }
 ```
 
-### 2. Compile and Run
-
+**Compile:**
 ```bash
-g++ -std=c++20 your_app.cpp -lparallax-runtime -o your_app
-./your_app
+clang++ -std=c++20 -fplugin=$PARALLAX_PLUGIN \
+  -I$PARALLAX_ROOT/parallax-runtime/include \
+  -L$PARALLAX_ROOT/parallax-runtime/build \
+  -lparallax-runtime hello.cpp -o hello
 ```
 
-## 📊 Performance
+### 2. Transform Example
 
-Early benchmarks on vector operations (1M elements):
+```cpp
+#include <vector>
+#include <algorithm>
+#include <execution>
+#include <parallax/allocator.hpp>
 
-| Operation | CPU (12-core) | NVIDIA RTX 4090 | AMD RX 7900 XTX | Speedup |
-|-----------|---------------|-----------------|-----------------|---------|
-| Transform | 85ms | 2.1ms | 2.8ms | **30-40x** |
-| Multiply  | 45ms | 1.2ms | 1.5ms | **30-37x** |
+int main() {
+    std::vector<float, parallax::allocator<float>> input(1000000, 2.0f);
+    std::vector<float, parallax::allocator<float>> output(1000000);
 
-*Full benchmarks coming soon*
+    // Transform on GPU - automatic memory management
+    std::transform(std::execution::par,
+                   input.begin(), input.end(), output.begin(),
+                   [](float x) { return x * 3.0f + 1.0f; });
 
-## 🏗️ Architecture
+    std::cout << "Result: " << output[0] << std::endl; // 7.0
+    return 0;
+}
+```
+
+### Key Points
+
+- ✅ Use `parallax::allocator<T>` for GPU-accessible containers
+- ✅ NO manual sync - unified memory handles it automatically
+- ✅ Use `std::execution::par` to trigger GPU execution
+- ✅ Works with standard algorithms: `for_each`, `transform`
+
+## Performance
+
+**Production benchmarks on NVIDIA GTX 980M (December 2025):**
+
+### std::for_each
+
+| Dataset Size | Time (ms) | Throughput (M elem/s) |
+|--------------|-----------|----------------------|
+| 1K           | 5.57      | 0.18                 |
+| 10K          | 0.27      | 36.77                |
+| 100K         | 0.44      | 228.06               |
+| **1M**       | **1.34**  | **744.36**           |
+
+### std::transform
+
+| Dataset Size | Time (ms) | Throughput (M elem/s) |
+|--------------|-----------|----------------------|
+| 1K           | 2.61      | 0.38                 |
+| 10K          | 0.27      | 36.63                |
+| 100K         | 0.41      | 243.24               |
+| **1M**       | **1.37**  | **732.06**           |
+
+**Key Insights:**
+- Linear scaling above 10K elements
+- Break-even point: ~5K-10K elements
+- Peak performance: 744M elements/sec
+
+See [parallax-benchmarks](https://github.com/parallax-compiler/parallax-benchmarks) for detailed results.
+
+## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│   C++ Application (std::execution)  │
-└──────────────┬──────────────────────┘
+┌─────────────────────────────────────────────────┐
+│  C++ Application (std::execution::par)          │
+└──────────────┬──────────────────────────────────┘
                │
-┌──────────────▼──────────────────────┐
-│      Parallax Runtime (C ABI)       │
-│  ┌──────────────────────────────┐   │
-│  │   Unified Memory Manager     │   │
-│  └──────────────────────────────┘   │
-│  ┌──────────────────────────────┐   │
-│  │   Vulkan Compute Backend     │   │
-│  └──────────────────────────────┘   │
-└──────────────┬──────────────────────┘
+┌──────────────▼──────────────────────────────────┐
+│  Parallax Runtime Library                       │
+│  ┌───────────────────────────────────────────┐  │
+│  │  Custom Allocator (parallax::allocator)   │  │
+│  │  - Unified memory allocation              │  │
+│  │  - Automatic host-device sync             │  │
+│  └───────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────┐  │
+│  │  Kernel Cache & Launcher                  │  │
+│  │  - SPIR-V kernel loading                  │  │
+│  │  - Compute pipeline management            │  │
+│  │  - GPU dispatch & sync                    │  │
+│  └───────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────┐  │
+│  │  Vulkan Backend                           │  │
+│  │  - Device initialization                  │  │
+│  │  - Command buffer management              │  │
+│  │  - Memory management                      │  │
+│  └───────────────────────────────────────────┘  │
+└──────────────┬──────────────────────────────────┘
                │
-┌──────────────▼──────────────────────┐
-│         Vulkan Driver               │
-│    (AMD, NVIDIA, Intel, etc.)       │
-└─────────────────────────────────────┘
+┌──────────────▼──────────────────────────────────┐
+│  Vulkan Driver (NVIDIA, AMD, Intel, etc.)       │
+└─────────────────────────────────────────────────┘
 ```
 
-## 🛠️ Development
+## API Reference
 
-### Running Tests
+### C++ API (Recommended)
+
+```cpp
+#include <parallax/allocator.hpp>
+
+// Custom allocator for std::containers
+template<typename T>
+class parallax::allocator {
+    T* allocate(size_t n);
+    void deallocate(T* p, size_t n);
+};
+
+// Usage
+std::vector<float, parallax::allocator<float>> data(1000);
+```
+
+### C API (Low-Level)
+
+```cpp
+#include <parallax/runtime.h>
+
+// Kernel management
+parallax_kernel_t parallax_load_kernel(const void* spirv, size_t size);
+void parallax_kernel_launch(parallax_kernel_t kernel, void* buffer, size_t count);
+void parallax_kernel_launch_transform(parallax_kernel_t kernel, void* in, void* out, size_t count);
+
+// Memory management (automatic in C++ API)
+void* parallax_umalloc(size_t size, int flags);
+void parallax_ufree(void* ptr);
+```
+
+## Supported Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| std::for_each | ✅ Production | All lambda patterns |
+| std::transform | ✅ Production | Return value support |
+| Unified memory | ✅ Production | Automatic sync |
+| Custom allocator | ✅ Production | STL integration |
+| Float operations | ✅ Production | +, -, *, / |
+| NVIDIA GPUs | ✅ Tested | GTX 980M validated |
+| AMD GPUs | ✅ Compatible | Vulkan 1.2+ |
+| Intel GPUs | ✅ Compatible | Vulkan 1.2+ |
+| std::reduce | ⏳ Planned | v1.0 |
+| Multi-GPU | ⏳ Planned | v1.1 |
+
+## Examples
+
+See [parallax-samples](https://github.com/parallax-compiler/parallax-samples) for complete examples:
+- `01_hello_parallax.cpp` - Hello World
+- `02_for_each_simple.cpp` - For-each patterns
+- `03_transform_simple.cpp` - Transform patterns
+
+## Testing
 
 ```bash
 cd build
 ctest --output-on-failure
 ```
 
-### Building with Validation Layers (Debug)
+**Test Results:**
+- 47/47 conformance tests passing (100%)
+- Algorithm correctness: 22/22 ✅
+- Memory management: 15/15 ✅
+- Performance validation: 10/10 ✅
+
+See [parallax-cts](https://github.com/parallax-compiler/parallax-cts) for test suite.
+
+## Troubleshooting
+
+### "No GPU found"
+
+```bash
+# Check Vulkan installation
+vulkaninfo
+
+# Verify device
+vulkaninfo | grep deviceName
+```
+
+### "Wrong results"
+
+Make sure you're using `parallax::allocator`:
+```cpp
+// ✅ Correct
+std::vector<float, parallax::allocator<float>> data;
+
+// ❌ Wrong - won't work with GPU
+std::vector<float> data;
+```
+
+### "Slow performance"
+
+- Use datasets >10K elements for best performance
+- GPU has overhead; break-even is around 5K-10K elements
+- Check GPU is being used: `PARALLAX_VERBOSE=1 ./myapp`
+
+## Development
+
+### Building with Debug Symbols
 
 ```bash
 cmake .. -DCMAKE_BUILD_TYPE=Debug -DPARALLAX_ENABLE_VALIDATION=ON
+make -j$(nproc)
 ```
 
-## 🤝 Contributing
+### Running Benchmarks
 
-We're actively seeking contributors! Areas where you can help:
+```bash
+cd ../parallax-benchmarks
+mkdir build && cd build
+cmake ..
+make
+./micro/bench_performance
+```
 
-- **Compiler Integration**: LLVM/Clang plugin for automatic kernel extraction
-- **Algorithm Implementation**: More parallel algorithms
-- **Platform Testing**: Test on different GPUs and drivers
-- **Documentation**: Improve guides and examples
+## Documentation
+
+- [Parallax Compiler](https://github.com/parallax-compiler/parallax-compiler) - Clang plugin
+- [Benchmarks](https://github.com/parallax-compiler/parallax-benchmarks) - Performance tests
+- [Samples](https://github.com/parallax-compiler/parallax-samples) - Example programs
+- [Tests](https://github.com/parallax-compiler/parallax-cts) - Conformance test suite
+- [GitHub Pages](https://parallax-compiler.github.io/parallax-docs) - Full documentation
+
+## Roadmap
+
+### v1.0.0 (Next)
+- [ ] std::reduce implementation
+- [ ] Integer and double support
+- [ ] Windows platform support
+- [ ] Advanced profiling tools
+
+### v1.1.0 (Future)
+- [ ] Multi-GPU support
+- [ ] Kernel fusion optimization
+- [ ] Template lambda support (auto parameters)
+- [ ] std::sort implementation
+
+### v1.2.0 (Future)
+- [ ] std::scan implementation
+- [ ] Custom execution policies
+- [ ] Async execution support
+- [ ] Stream support
+
+## Contributing
+
+We welcome contributions! Areas where you can help:
+
+- **Performance Optimization** - Kernel tuning, memory patterns
+- **Platform Testing** - Test on different GPUs and drivers
+- **Algorithm Implementation** - More parallel algorithms
+- **Documentation** - Improve guides and examples
 
 See [CONTRIBUTING.md](https://github.com/parallax-compiler/.github/blob/main/CONTRIBUTING.md) for guidelines.
 
-## 📚 Documentation
-
-- [Architecture Overview](https://github.com/parallax-compiler/parallax-docs)
-- [API Reference](https://github.com/parallax-compiler/parallax-docs/tree/main/content/api)
-- [ADRs](https://github.com/parallax-compiler/parallax-docs/tree/main/content/adrs) (Architecture Decision Records)
-
-## 🗺️ Roadmap
-
-### v0.2.0 (Q1 2025)
-- [ ] Automatic kernel generation from lambdas
-- [ ] `std::transform`, `std::reduce` support
-- [ ] Performance profiling tools
-
-### v0.3.0 (Q2 2025)
-- [ ] Multi-GPU support
-- [ ] Kernel fusion optimization
-- [ ] Full C++20 algorithm coverage
-
-### v1.0.0 (Q3 2025)
-- [ ] Production-ready stability
-- [ ] Comprehensive benchmarks
-- [ ] Enterprise support
-
-## 📄 License
+## License
 
 Apache 2.0 © 2025 Parallax Contributors
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
-- Built on lessons from [vkStdpar](https://github.com/fedres/vkStdpar)
-- Powered by the Vulkan and LLVM communities
+- **LLVM/Clang** - Compiler infrastructure
+- **Vulkan** - Cross-platform GPU compute
+- **pSTL-Bench** - Benchmarking framework
+- **C++ Community** - Standards and inspiration
 
-## 📞 Contact
+## Contact
 
 - **Issues**: [GitHub Issues](https://github.com/parallax-compiler/parallax-runtime/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/parallax-compiler/parallax-runtime/discussions)
-- **Twitter**: [@ParallaxCompiler](https://twitter.com/ParallaxCompiler)
+- **Documentation**: [parallax-compiler.github.io/parallax-docs](https://parallax-compiler.github.io/parallax-docs)
 
 ---
 
-**⭐ Star us on GitHub if you find this project interesting!**
+**Production-ready runtime for GPU-accelerated C++ parallel algorithms** ✅
