@@ -21,6 +21,15 @@ parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words);
 void parallax_kernel_launch(parallax_kernel_t kernel, ...);
 void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...);
 
+/* NEW V2: Kernel execution with captured parameters */
+void parallax_kernel_launch_with_captures(
+    parallax_kernel_t kernel,
+    void* buffer,
+    size_t count,
+    void* captures,
+    size_t capture_size
+);
+
 #ifdef __cplusplus
 }
 #endif

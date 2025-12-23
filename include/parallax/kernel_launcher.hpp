@@ -32,7 +32,16 @@ public:
 
     // Transform launch (in/out buffers + count)
     bool launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count);
-    
+
+    // NEW V2: Launch with captured parameters (for function objects)
+    bool launch_with_captures(
+        const std::string& kernel_name,
+        void* buffer,
+        size_t count,
+        void* captures,
+        size_t capture_size
+    );
+
     // Synchronize all pending operations
     void sync();
     

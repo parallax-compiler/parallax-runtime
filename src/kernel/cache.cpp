@@ -141,3 +141,46 @@ void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...) {
 
     std::cout << "[parallax_kernel_launch_transform] Kernel completed successfully" << std::endl;
 }
+
+// NEW V2: Kernel launch with captured parameters (for function objects)
+void parallax_kernel_launch_with_captures(
+    parallax_kernel_t kernel,
+    void* buffer,
+    size_t count,
+    void* captures,
+    size_t capture_size) {
+
+    if (!kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_kernel_launch_with_captures] Invalid kernel or launcher not initialized" << std::endl;
+        return;
+    }
+
+    auto* handle = reinterpret_cast<KernelHandle*>(kernel);
+
+    std::cout << "[parallax_kernel_launch_with_captures] Launching kernel: " << handle->name
+              << " with buffer=" << buffer
+              << ", count=" << count
+              << ", captures=" << captures
+              << ", capture_size=" << capture_size << std::endl;
+
+    // Launch kernel with captures
+    bool success = g_kernel_launcher->launch_with_captures(
+        handle->name, buffer, count, captures, capture_size);
+
+    if (!success) {
+        std::cerr << "[parallax_kernel_launch_with_captures] Failed to launch kernel" << std::endl;
+        return;
+    }
+
+    // Wait for completion
+    std::cout << "[parallax_kernel_launch_with_captures] Waiting for kernel completion..." << std::endl;
+    g_kernel_launcher->sync();
+
+    // Sync buffer back to host
+    auto* memory_manager = parallax::get_global_memory_manager();
+    if (memory_manager) {
+        memory_manager->sync_after_kernel(buffer);
+    }
+
+    std::cout << "[parallax_kernel_launch_with_captures] Kernel completed successfully" << std::endl;
+}
