@@ -88,6 +88,9 @@ public:
     // Get buffer for kernel launch
     VkBuffer get_buffer(void* ptr);
     
+    // Register external buffer (e.g., from std::vector)
+    bool register_external_buffer(void* host_ptr, size_t size);
+    
 private:
     bool create_buffer(size_t size, VkBuffer& buffer, VkDeviceMemory& memory, void*& mapped_ptr);
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);

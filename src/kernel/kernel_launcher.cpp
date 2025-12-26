@@ -417,50 +417,6 @@ bool KernelLauncher::launch_with_captures(
     // Sync dirty blocks before kernel
     memory_manager_->sync_before_kernel(buffer);
 
-    // Create a temporary buffer for captures
-    VkBuffer capture_buffer = VK_NULL_HANDLE;
-    VkDeviceMemory capture_memory = VK_NULL_HANDLE;
-
-    if (captures && capture_size > 0) {
-        // Create buffer for captures
-        VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.size = capture_size;
-        buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        if (vkCreateBuffer(backend_->device(), &buffer_info, nullptr, &capture_buffer) != VK_SUCCESS) {
-            std::cerr << "Failed to create capture buffer" << std::endl;
-            return false;
-        }
-
-        // Allocate memory for captures
-        VkMemoryRequirements mem_requirements;
-        vkGetBufferMemoryRequirements(backend_->device(), capture_buffer, &mem_requirements);
-
-        VkMemoryAllocateInfo alloc_info{};
-        alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        alloc_info.allocationSize = mem_requirements.size;
-        alloc_info.memoryTypeIndex = backend_->find_memory_type(
-            mem_requirements.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-        );
-
-        if (vkAllocateMemory(backend_->device(), &alloc_info, nullptr, &capture_memory) != VK_SUCCESS) {
-            std::cerr << "Failed to allocate capture memory" << std::endl;
-            vkDestroyBuffer(backend_->device(), capture_buffer, nullptr);
-            return false;
-        }
-
-        vkBindBufferMemory(backend_->device(), capture_buffer, capture_memory, 0);
-
-        // Copy captures to GPU
-        void* mapped_data;
-        vkMapMemory(backend_->device(), capture_memory, 0, capture_size, 0, &mapped_data);
-        std::memcpy(mapped_data, captures, capture_size);
-        vkUnmapMemory(backend_->device(), capture_memory);
-    }
-
     // Check descriptor cache
     CacheKey key{pipeline_data.descriptor_set_layout, buffer};
     VkDescriptorSet descriptor_set;
@@ -476,44 +432,27 @@ bool KernelLauncher::launch_with_captures(
 
         if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
             std::cerr << "Failed to allocate descriptor set" << std::endl;
-            if (capture_buffer != VK_NULL_HANDLE) {
-                vkFreeMemory(backend_->device(), capture_memory, nullptr);
-                vkDestroyBuffer(backend_->device(), capture_buffer, nullptr);
-            }
             return false;
         }
+
+        // Update descriptor set (main buffer only)
+        VkDescriptorBufferInfo buffer_info{};
+        buffer_info.buffer = vk_buffer;
+        buffer_info.offset = 0;
+        buffer_info.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = descriptor_set;
+        write.dstBinding = 0;
+        write.dstArrayElement = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.descriptorCount = 1;
+        write.pBufferInfo = &buffer_info;
+
+        vkUpdateDescriptorSets(backend_->device(), 1, &write, 0, nullptr);
+        descriptor_cache_[key] = descriptor_set;
     }
-
-    // Update descriptor set (main buffer + capture buffer)
-    std::vector<VkDescriptorBufferInfo> buffer_infos(2);
-    buffer_infos[0].buffer = vk_buffer;
-    buffer_infos[0].offset = 0;
-    buffer_infos[0].range = VK_WHOLE_SIZE;
-
-    if (capture_buffer != VK_NULL_HANDLE) {
-        buffer_infos[1].buffer = capture_buffer;
-        buffer_infos[1].offset = 0;
-        buffer_infos[1].range = VK_WHOLE_SIZE;
-    } else {
-        // No captures, use same buffer for both bindings
-        buffer_infos[1].buffer = vk_buffer;
-        buffer_infos[1].offset = 0;
-        buffer_infos[1].range = VK_WHOLE_SIZE;
-    }
-
-    std::vector<VkWriteDescriptorSet> writes(2);
-    for (int i = 0; i < 2; ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = descriptor_set;
-        writes[i].dstBinding = i;
-        writes[i].dstArrayElement = 0;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[i].descriptorCount = 1;
-        writes[i].pBufferInfo = &buffer_infos[i];
-    }
-
-    vkUpdateDescriptorSets(backend_->device(), 2, writes.data(), 0, nullptr);
-    descriptor_cache_[key] = descriptor_set;
 
     // Wait for previous operations if any
     sync();
@@ -531,9 +470,25 @@ bool KernelLauncher::launch_with_captures(
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
 
-    // Push constants: count
-    uint32_t push_data[4] = {static_cast<uint32_t>(count), 0, 0, 0};
-    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_data), push_data);
+    // Push constants: count + captured parameters
+    // Layout: { uint32 count, <capture_data bytes> }
+    std::vector<uint8_t> push_data;
+    push_data.resize(sizeof(uint32_t) + capture_size);
+
+    // Pack count
+    uint32_t count_u32 = static_cast<uint32_t>(count);
+    std::memcpy(push_data.data(), &count_u32, sizeof(uint32_t));
+
+    // Pack captures
+    if (capture_size > 0 && captures != nullptr) {
+        std::memcpy(push_data.data() + sizeof(uint32_t), captures, capture_size);
+        std::cout << "[KernelLauncher] Packed " << capture_size 
+                  << " bytes of capture data into push constants" << std::endl;
+    }
+
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, 
+                      VK_SHADER_STAGE_COMPUTE_BIT, 0, 
+                      push_data.size(), push_data.data());
 
     // Dispatch compute shader (256 threads per workgroup)
     uint32_t workgroup_count = (count + 255) / 256;
@@ -549,19 +504,10 @@ bool KernelLauncher::launch_with_captures(
 
     if (vkQueueSubmit(backend_->compute_queue(), 1, &submit_info, fence_) != VK_SUCCESS) {
         std::cerr << "Failed to submit command buffer" << std::endl;
-        if (capture_buffer != VK_NULL_HANDLE) {
-            vkFreeMemory(backend_->device(), capture_memory, nullptr);
-            vkDestroyBuffer(backend_->device(), capture_buffer, nullptr);
-        }
         return false;
     }
 
     fence_signaled_ = false;
-
-    // Clean up capture buffer (after sync, the data is on GPU)
-    // For MVP, we defer cleanup to avoid synchronization issues
-    // In production, we should use a proper resource manager
-
     return true;
 }
 

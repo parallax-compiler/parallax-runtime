@@ -35,3 +35,6 @@ void parallax_kernel_launch_with_captures(
 #endif
 
 #endif /* PARALLAX_RUNTIME_H */
+
+/* Register external buffer (e.g., from std::vector) for GPU use */
+bool parallax_register_buffer(void* ptr, size_t size);

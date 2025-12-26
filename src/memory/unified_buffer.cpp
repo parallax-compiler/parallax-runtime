@@ -244,4 +244,52 @@ uint32_t MemoryManager::find_memory_type(uint32_t type_filter, VkMemoryPropertyF
     return 0;
 }
 
+
+// Register external buffer (e.g., from std::vector)
+bool MemoryManager::register_external_buffer(void* host_ptr, size_t size) {
+    if (!host_ptr || size == 0) {
+        std::cerr << "[MemoryManager] Invalid external buffer parameters" << std::endl;
+        return false;
+    }
+    
+    // Check if already registered
+    if (buffers_.find(host_ptr) != buffers_.end()) {
+        std::cout << "[MemoryManager] Buffer already registered at " << host_ptr << std::endl;
+        return true;
+    }
+    
+    std::cout << "[MemoryManager] Registering external buffer: " << host_ptr 
+              << ", size: " << size << " bytes" << std::endl;
+    
+    auto buffer_info = std::make_unique<UnifiedBuffer>();
+    buffer_info->host_ptr = host_ptr;
+    buffer_info->size = size;
+    
+    // Create Vulkan buffer
+    VkBuffer vk_buffer;
+    VkDeviceMemory vk_memory;
+    void* mapped_ptr;
+    
+    if (!create_buffer(size, vk_buffer, vk_memory, mapped_ptr)) {
+        std::cerr << "[MemoryManager] Failed to create Vulkan buffer for external memory" << std::endl;
+        return false;
+    }
+    
+    buffer_info->buffer = vk_buffer;
+    buffer_info->memory = vk_memory;
+    buffer_info->is_mapped = true;
+    
+    // Initialize dirty tracking
+    buffer_info->init_dirty_tracking();
+    
+    // Copy initial data from host to GPU
+    std::memcpy(mapped_ptr, host_ptr, size);
+    
+    // Store buffer
+    buffers_[host_ptr] = std::move(buffer_info);
+    
+    std::cout << "[MemoryManager] External buffer registered successfully" << std::endl;
+    return true;
+}
+
 } // namespace parallax

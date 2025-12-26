@@ -1,3 +1,5 @@
+#include <new>
+#include <type_traits>
 #ifndef PARALLAX_ALLOCATOR_HPP
 #define PARALLAX_ALLOCATOR_HPP
 

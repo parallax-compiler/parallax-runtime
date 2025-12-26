@@ -184,3 +184,13 @@ void parallax_kernel_launch_with_captures(
 
     std::cout << "[parallax_kernel_launch_with_captures] Kernel completed successfully" << std::endl;
 }
+
+bool parallax_register_buffer(void* ptr, size_t size) {
+    auto* memory_manager = parallax::get_global_memory_manager();
+    if (!memory_manager) {
+        std::cerr << "[parallax_register_buffer] Memory manager not initialized" << std::endl;
+        return false;
+    }
+    
+    return memory_manager->register_external_buffer(ptr, size);
+}
