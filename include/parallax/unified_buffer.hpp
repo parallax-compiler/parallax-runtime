@@ -90,10 +90,12 @@ public:
     
     // Register external buffer (e.g., from std::vector)
     bool register_external_buffer(void* host_ptr, size_t size);
-    
+
+    // Public helper method for finding memory types (used by KernelLauncher)
+    uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
+
 private:
     bool create_buffer(size_t size, VkBuffer& buffer, VkDeviceMemory& memory, void*& mapped_ptr);
-    uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
     void transfer_dirty_blocks(UnifiedBuffer* buffer, SyncDirection direction);
     
     VulkanBackend* backend_;

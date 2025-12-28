@@ -8,18 +8,20 @@ namespace parallax {
 KernelLauncher::KernelLauncher(VulkanBackend* backend, MemoryManager* memory_manager)
     : backend_(backend), memory_manager_(memory_manager) {
     
-    // Create descriptor pool
-    VkDescriptorPoolSize pool_size{};
-    pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    pool_size.descriptorCount = 2048; // Support more buffers/sets
-    
+    // Create descriptor pool with support for both storage and uniform buffers
+    std::vector<VkDescriptorPoolSize> pool_sizes(2);
+    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pool_sizes[0].descriptorCount = 2048; // For data buffers
+    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_sizes[1].descriptorCount = 2048; // For captures buffers
+
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.poolSizeCount = 1;
-    pool_info.pPoolSizes = &pool_size;
+    pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+    pool_info.pPoolSizes = pool_sizes.data();
     pool_info.maxSets = 1024;
     pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    
+
     if (vkCreateDescriptorPool(backend_->device(), &pool_info, nullptr, &descriptor_pool_) != VK_SUCCESS) {
         std::cerr << "Failed to create descriptor pool" << std::endl;
     }
@@ -52,34 +54,54 @@ KernelLauncher::KernelLauncher(VulkanBackend* backend, MemoryManager* memory_man
 }
 
 KernelLauncher::~KernelLauncher() {
+    std::cout << "[KernelLauncher] Destructor: Cleaning up " << pipelines_.size() << " pipelines" << std::endl;
+
     // Clean up pipelines
     for (auto& [hash, pipeline_data] : pipelines_) {
-        vkDestroyPipeline(backend_->device(), pipeline_data.pipeline, nullptr);
-        vkDestroyPipelineLayout(backend_->device(), pipeline_data.layout, nullptr);
-        vkDestroyDescriptorSetLayout(backend_->device(), pipeline_data.descriptor_set_layout, nullptr);
-        vkDestroyShaderModule(backend_->device(), pipeline_data.shader_module, nullptr);
+        try {
+            if (pipeline_data.pipeline != VK_NULL_HANDLE) {
+                vkDestroyPipeline(backend_->device(), pipeline_data.pipeline, nullptr);
+            }
+            if (pipeline_data.layout != VK_NULL_HANDLE) {
+                vkDestroyPipelineLayout(backend_->device(), pipeline_data.layout, nullptr);
+            }
+            if (pipeline_data.descriptor_set_layout != VK_NULL_HANDLE) {
+                vkDestroyDescriptorSetLayout(backend_->device(), pipeline_data.descriptor_set_layout, nullptr);
+            }
+            if (pipeline_data.shader_module != VK_NULL_HANDLE) {
+                vkDestroyShaderModule(backend_->device(), pipeline_data.shader_module, nullptr);
+            }
+        } catch (...) {
+            std::cerr << "[KernelLauncher] Error freeing pipeline" << std::endl;
+        }
     }
-    
+
+    pipelines_.clear();
+
     if (fence_ != VK_NULL_HANDLE) {
         vkDestroyFence(backend_->device(), fence_, nullptr);
     }
-    
+
     if (command_pool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(backend_->device(), command_pool_, nullptr);
     }
-    
+
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(backend_->device(), descriptor_pool_, nullptr);
     }
+
+    std::cout << "[KernelLauncher] Destructor: Cleanup complete" << std::endl;
 }
 
 bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_code, size_t spirv_size) {
-    // Debug: Dump SPIR-V if requested or always for now
+    // Debug: Dump SPIR-V header only (first 10 words) to avoid output buffer issues
     std::cerr << "SPIR-V Dump for " << name << " (" << spirv_size << " bytes):" << std::endl;
-    for (size_t i = 0; i < std::min<size_t>(spirv_size / 4, 512); ++i) {
-        std::cerr << "  [" << i << "] 0x" << std::hex << spirv_code[i] << std::dec << "\n";
+    std::cerr << "  Header (first 10 words): ";
+    for (size_t i = 0; i < std::min<size_t>(spirv_size / 4, 10); ++i) {
+        std::cerr << "0x" << std::hex << spirv_code[i] << std::dec;
+        if (i + 1 < std::min<size_t>(spirv_size / 4, 10)) std::cerr << " ";
     }
-    std::cerr << std::flush;
+    std::cerr << std::endl;
 
     // Create shader module
     VkShaderModuleCreateInfo create_info{};
@@ -93,32 +115,39 @@ bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_
         return false;
     }
     
-    // Create descriptor set layout (Up to 2 storage buffer bindings for in/out)
-    std::vector<VkDescriptorSetLayoutBinding> bindings(2);
+    // Create descriptor set layout
+    // Binding 0-1: Storage buffers for data (in/out)
+    // Binding 2: Uniform buffer for captures
+    std::vector<VkDescriptorSetLayoutBinding> bindings(3);
     for (int i = 0; i < 2; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    
+    // Binding 2: Uniform buffer for captures
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
     VkDescriptorSetLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
     layout_info.pBindings = bindings.data();
-    
+
     VkDescriptorSetLayout descriptor_set_layout;
     if (vkCreateDescriptorSetLayout(backend_->device(), &layout_info, nullptr, &descriptor_set_layout) != VK_SUCCESS) {
         std::cerr << "Failed to create descriptor set layout" << std::endl;
         vkDestroyShaderModule(backend_->device(), shader_module, nullptr);
         return false;
     }
-    
-    // Create pipeline layout with push constants
+
+    // Create pipeline layout with push constants (only count, no captures!)
     VkPushConstantRange push_constant{};
     push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     push_constant.offset = 0;
-    push_constant.size = 16; // 4 uint32_t values
+    push_constant.size = 4; // Only 1 uint32_t (count) - captures moved to uniform buffer!
     
     VkPipelineLayoutCreateInfo pipeline_layout_info{};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -175,13 +204,20 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
         return false;
     }
-    
+
     auto& pipeline_data = it->second;
-    
-    // Get Vulkan buffer
+
+    // Auto-register buffer if not already registered
     VkBuffer vk_buffer = memory_manager_->get_buffer(buffer);
+    if (vk_buffer == VK_NULL_HANDLE && buffer != nullptr) {
+        std::cerr << "[KernelLauncher] Auto-registering buffer" << std::endl;
+        size_t buffer_size = count * sizeof(float);  // Assume float elements
+        memory_manager_->register_external_buffer(buffer, buffer_size);
+        vk_buffer = memory_manager_->get_buffer(buffer);
+    }
+
     if (vk_buffer == VK_NULL_HANDLE) {
-        std::cerr << "Invalid buffer" << std::endl;
+        std::cerr << "Invalid buffer after auto-registration" << std::endl;
         return false;
     }
     
@@ -212,18 +248,57 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     buffer_info.buffer = vk_buffer;
     buffer_info.offset = 0;
     buffer_info.range = VK_WHOLE_SIZE;
-    
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = descriptor_set;
-    write.dstBinding = 0;
-    write.dstArrayElement = 0;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    write.descriptorCount = 1;
-    write.pBufferInfo = &buffer_info;
-    
-    vkUpdateDescriptorSets(backend_->device(), 1, &write, 0, nullptr);
+
+    // Create a small dummy uniform buffer for captures (empty for now)
+    VkBuffer dummy_uniform_buffer = VK_NULL_HANDLE;
+    VkDeviceMemory dummy_uniform_memory = VK_NULL_HANDLE;
+    VkBufferCreateInfo uniform_buf_info{};
+    uniform_buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    uniform_buf_info.size = 64; // Small buffer for captures
+    uniform_buf_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    uniform_buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    vkCreateBuffer(backend_->device(), &uniform_buf_info, nullptr, &dummy_uniform_buffer);
+
+    VkMemoryRequirements mem_reqs;
+    vkGetBufferMemoryRequirements(backend_->device(), dummy_uniform_buffer, &mem_reqs);
+
+    VkMemoryAllocateInfo alloc{};
+    alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc.allocationSize = mem_reqs.size;
+    alloc.memoryTypeIndex = memory_manager_->find_memory_type(mem_reqs.memoryTypeBits,
+                                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    vkAllocateMemory(backend_->device(), &alloc, nullptr, &dummy_uniform_memory);
+    vkBindBufferMemory(backend_->device(), dummy_uniform_buffer, dummy_uniform_memory, 0);
+
+    VkDescriptorBufferInfo captures_buffer_info{};
+    captures_buffer_info.buffer = dummy_uniform_buffer;
+    captures_buffer_info.offset = 0;
+    captures_buffer_info.range = VK_WHOLE_SIZE;
+
+    // Write both storage buffer (binding 0) and uniform buffer (binding 2)
+    std::vector<VkWriteDescriptorSet> writes(2);
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = descriptor_set;
+    writes[0].dstBinding = 0;
+    writes[0].dstArrayElement = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[0].descriptorCount = 1;
+    writes[0].pBufferInfo = &buffer_info;
+
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = descriptor_set;
+    writes[1].dstBinding = 2; // Captures uniform buffer
+    writes[1].dstArrayElement = 0;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[1].descriptorCount = 1;
+    writes[1].pBufferInfo = &captures_buffer_info;
+
+    vkUpdateDescriptorSets(backend_->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     descriptor_cache_[key] = descriptor_set;
+
+    // TODO: Clean up dummy_uniform_buffer and dummy_uniform_memory later
     
     // Wait for previous operations if any
     sync();
@@ -240,11 +315,10 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
-    
-    // Push constants: count and multiplier
-    uint32_t push_data[4] = {static_cast<uint32_t>(count), 0, 0, 0};
-    std::memcpy(&push_data[1], &multiplier, sizeof(float));
-    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_data), push_data);
+
+    // Push constants: only count (captures moved to uniform buffer!)
+    uint32_t push_count = static_cast<uint32_t>(count);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &push_count);
     
     // Dispatch compute shader (256 threads per workgroup)
     uint32_t workgroup_count = (count + 255) / 256;
@@ -289,15 +363,27 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
         return false;
     }
-    
+
     auto& pipeline_data = it->second;
-    
-    // Get Vulkan buffers
+
+    // Auto-register buffers if not already registered
+    size_t buffer_size = count * sizeof(float);  // Assume float elements
     VkBuffer vk_in = memory_manager_->get_buffer(in_buffer);
+    if (vk_in == VK_NULL_HANDLE && in_buffer != nullptr) {
+        std::cerr << "[KernelLauncher] Auto-registering input buffer" << std::endl;
+        memory_manager_->register_external_buffer(in_buffer, buffer_size);
+        vk_in = memory_manager_->get_buffer(in_buffer);
+    }
+
     VkBuffer vk_out = memory_manager_->get_buffer(out_buffer);
-    
+    if (vk_out == VK_NULL_HANDLE && out_buffer != nullptr) {
+        std::cerr << "[KernelLauncher] Auto-registering output buffer" << std::endl;
+        memory_manager_->register_external_buffer(out_buffer, buffer_size);
+        vk_out = memory_manager_->get_buffer(out_buffer);
+    }
+
     if (vk_in == VK_NULL_HANDLE || vk_out == VK_NULL_HANDLE) {
-        std::cerr << "Invalid buffers" << std::endl;
+        std::cerr << "Invalid buffers after auto-registration" << std::endl;
         return false;
     }
     
@@ -325,17 +411,45 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
             return false;
         }
         
-        // Update descriptor set (2 buffers)
+        // Update descriptor set (2 storage buffers + 1 uniform buffer for captures)
         std::vector<VkDescriptorBufferInfo> buffer_infos(2);
         buffer_infos[0].buffer = vk_in;
         buffer_infos[0].offset = 0;
         buffer_infos[0].range = VK_WHOLE_SIZE;
-        
+
         buffer_infos[1].buffer = vk_out;
         buffer_infos[1].offset = 0;
         buffer_infos[1].range = VK_WHOLE_SIZE;
-        
-        std::vector<VkWriteDescriptorSet> writes(2);
+
+        // Create dummy uniform buffer for captures
+        VkBuffer dummy_uniform_buffer = VK_NULL_HANDLE;
+        VkDeviceMemory dummy_uniform_memory = VK_NULL_HANDLE;
+        VkBufferCreateInfo uniform_buf_info{};
+        uniform_buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        uniform_buf_info.size = 64; // Small buffer
+        uniform_buf_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        uniform_buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        vkCreateBuffer(backend_->device(), &uniform_buf_info, nullptr, &dummy_uniform_buffer);
+
+        VkMemoryRequirements mem_reqs;
+        vkGetBufferMemoryRequirements(backend_->device(), dummy_uniform_buffer, &mem_reqs);
+
+        VkMemoryAllocateInfo alloc{};
+        alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc.allocationSize = mem_reqs.size;
+        alloc.memoryTypeIndex = memory_manager_->find_memory_type(mem_reqs.memoryTypeBits,
+                                                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        vkAllocateMemory(backend_->device(), &alloc, nullptr, &dummy_uniform_memory);
+        vkBindBufferMemory(backend_->device(), dummy_uniform_buffer, dummy_uniform_memory, 0);
+
+        VkDescriptorBufferInfo captures_buffer_info{};
+        captures_buffer_info.buffer = dummy_uniform_buffer;
+        captures_buffer_info.offset = 0;
+        captures_buffer_info.range = VK_WHOLE_SIZE;
+
+        std::vector<VkWriteDescriptorSet> writes(3);
         for (int i = 0; i < 2; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = descriptor_set;
@@ -345,9 +459,20 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
             writes[i].descriptorCount = 1;
             writes[i].pBufferInfo = &buffer_infos[i];
         }
-        
-        vkUpdateDescriptorSets(backend_->device(), 2, writes.data(), 0, nullptr);
+
+        // Binding 2: Captures uniform buffer
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = descriptor_set;
+        writes[2].dstBinding = 2;
+        writes[2].dstArrayElement = 0;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[2].descriptorCount = 1;
+        writes[2].pBufferInfo = &captures_buffer_info;
+
+        vkUpdateDescriptorSets(backend_->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         descriptor_cache_[key] = descriptor_set;
+
+        // TODO: Clean up dummy buffers later
     }
     
     // Wait for previous operations if any
@@ -365,10 +490,10 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
     
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
-    
-    // Push constants: count
-    uint32_t push_data[4] = {static_cast<uint32_t>(count), 0, 0, 0};
-    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_data), push_data);
+
+    // Push constants: only count (captures moved to uniform buffer!)
+    uint32_t push_count = static_cast<uint32_t>(count);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &push_count);
     
     // Dispatch
     uint32_t workgroup_count = (count + 255) / 256;
