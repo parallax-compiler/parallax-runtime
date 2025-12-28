@@ -27,18 +27,32 @@ MemoryManager::MemoryManager(VulkanBackend* backend) : backend_(backend) {
 }
 
 MemoryManager::~MemoryManager() {
+    std::cout << "[MemoryManager] Destructor: Cleaning up " << buffers_.size() << " buffers" << std::endl;
+
     // Free all buffers
     for (auto& [ptr, buffer] : buffers_) {
-        if (buffer->is_mapped) {
-            vkUnmapMemory(backend_->device(), buffer->memory);
+        try {
+            if (buffer && buffer->memory != VK_NULL_HANDLE) {
+                if (buffer->is_mapped) {
+                    vkUnmapMemory(backend_->device(), buffer->memory);
+                }
+                if (buffer->buffer != VK_NULL_HANDLE) {
+                    vkDestroyBuffer(backend_->device(), buffer->buffer, nullptr);
+                }
+                vkFreeMemory(backend_->device(), buffer->memory, nullptr);
+            }
+        } catch (...) {
+            std::cerr << "[MemoryManager] Error freeing buffer at " << ptr << std::endl;
         }
-        vkDestroyBuffer(backend_->device(), buffer->buffer, nullptr);
-        vkFreeMemory(backend_->device(), buffer->memory, nullptr);
     }
-    
+
+    buffers_.clear();
+
     if (command_pool_ != VK_NULL_HANDLE) {
         vkDestroyCommandPool(backend_->device(), command_pool_, nullptr);
     }
+
+    std::cout << "[MemoryManager] Destructor: Cleanup complete" << std::endl;
 }
 
 void* MemoryManager::allocate(size_t size) {
