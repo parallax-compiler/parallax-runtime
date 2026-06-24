@@ -25,13 +25,18 @@ public:
     bool load_kernel(const std::string& name, const uint32_t* spirv_code, size_t spirv_size);
     
     // Launch kernel by name (vector_multiply specific)
-    bool launch(const std::string& kernel_name, void* buffer, size_t count, float multiplier);
+    bool launch(const std::string& kernel_name, void* buffer, size_t count, float multiplier,
+                size_t elem_size = sizeof(float));
 
-    // Generic launch (buffer + count)
-    bool launch(const std::string& kernel_name, void* buffer, size_t count);
+    // Generic launch (buffer + count). elem_size is the per-element byte size of
+    // the data buffer (e.g. sizeof(float)=4, sizeof(int64_t)=8); defaults to float
+    // for backward compatibility.
+    bool launch(const std::string& kernel_name, void* buffer, size_t count,
+                size_t elem_size = sizeof(float));
 
     // Transform launch (in/out buffers + count)
-    bool launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count);
+    bool launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer,
+                          size_t count, size_t elem_size = sizeof(float));
 
     // NEW V2: Launch with captured parameters (for function objects)
     bool launch_with_captures(
@@ -39,7 +44,8 @@ public:
         void* buffer,
         size_t count,
         void* captures,
-        size_t capture_size
+        size_t capture_size,
+        size_t elem_size = sizeof(float)
     );
 
     // Synchronize all pending operations

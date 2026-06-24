@@ -69,18 +69,20 @@ void parallax_kernel_launch(parallax_kernel_t kernel, ...) {
 
     auto* handle = reinterpret_cast<KernelHandle*>(kernel);
 
-    // Extract variadic arguments: (void* buffer, size_t count)
+    // Extract variadic arguments: (void* buffer, size_t count, size_t elem_size)
     va_list args;
     va_start(args, kernel);
     void* buffer = va_arg(args, void*);
     size_t count = va_arg(args, size_t);
+    size_t elem_size = va_arg(args, size_t);
     va_end(args);
 
     std::cout << "[parallax_kernel_launch] Launching kernel: " << handle->name
-              << " with buffer=" << buffer << ", count=" << count << std::endl;
+              << " with buffer=" << buffer << ", count=" << count
+              << ", elem_size=" << elem_size << std::endl;
 
     // Launch kernel
-    bool success = g_kernel_launcher->launch(handle->name, buffer, count);
+    bool success = g_kernel_launcher->launch(handle->name, buffer, count, elem_size);
 
     if (!success) {
         std::cerr << "[parallax_kernel_launch] Failed to launch kernel" << std::endl;
@@ -108,12 +110,13 @@ void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...) {
 
     auto* handle = reinterpret_cast<KernelHandle*>(kernel);
 
-    // Extract variadic arguments: (void* in_buffer, void* out_buffer, size_t count)
+    // Extract variadic arguments: (void* in_buffer, void* out_buffer, size_t count, size_t elem_size)
     va_list args;
     va_start(args, kernel);
     void* in_buffer = va_arg(args, void*);
     void* out_buffer = va_arg(args, void*);
     size_t count = va_arg(args, size_t);
+    size_t elem_size = va_arg(args, size_t);
     va_end(args);
 
     std::cout << "[parallax_kernel_launch_transform] Launching kernel: " << handle->name
@@ -122,7 +125,7 @@ void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...) {
               << ", count=" << count << std::endl;
 
     // Launch transform kernel (separate input/output buffers)
-    bool success = g_kernel_launcher->launch_transform(handle->name, in_buffer, out_buffer, count);
+    bool success = g_kernel_launcher->launch_transform(handle->name, in_buffer, out_buffer, count, elem_size);
 
     if (!success) {
         std::cerr << "[parallax_kernel_launch_transform] Failed to launch kernel" << std::endl;
@@ -148,7 +151,8 @@ void parallax_kernel_launch_with_captures(
     void* buffer,
     size_t count,
     void* captures,
-    size_t capture_size) {
+    size_t capture_size,
+    size_t elem_size) {
 
     if (!kernel || !g_kernel_launcher) {
         std::cerr << "[parallax_kernel_launch_with_captures] Invalid kernel or launcher not initialized" << std::endl;
@@ -165,7 +169,7 @@ void parallax_kernel_launch_with_captures(
 
     // Launch kernel with captures
     bool success = g_kernel_launcher->launch_with_captures(
-        handle->name, buffer, count, captures, capture_size);
+        handle->name, buffer, count, captures, capture_size, elem_size);
 
     if (!success) {
         std::cerr << "[parallax_kernel_launch_with_captures] Failed to launch kernel" << std::endl;

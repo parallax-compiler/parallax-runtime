@@ -27,7 +27,8 @@ void parallax_kernel_launch_with_captures(
     void* buffer,
     size_t count,
     void* captures,
-    size_t capture_size
+    size_t capture_size,
+    size_t elem_size
 );
 
 #ifdef __cplusplus

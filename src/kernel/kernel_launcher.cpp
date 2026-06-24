@@ -198,7 +198,7 @@ bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_
     return true;
 }
 
-bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t count, float multiplier) {
+bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t count, float multiplier, size_t elem_size) {
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
@@ -210,8 +210,8 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     // Auto-register buffer if not already registered
     VkBuffer vk_buffer = memory_manager_->get_buffer(buffer);
     if (vk_buffer == VK_NULL_HANDLE && buffer != nullptr) {
-        std::cerr << "[KernelLauncher] Auto-registering buffer" << std::endl;
-        size_t buffer_size = count * sizeof(float);  // Assume float elements
+        std::cerr << "[KernelLauncher] Auto-registering buffer (elem_size=" << elem_size << ")" << std::endl;
+        size_t buffer_size = count * elem_size;
         memory_manager_->register_external_buffer(buffer, buffer_size);
         vk_buffer = memory_manager_->get_buffer(buffer);
     }
@@ -352,12 +352,12 @@ void KernelLauncher::sync() {
     }
 }
 
-bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t count) {
+bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t count, size_t elem_size) {
     // Reuse specific implementation with dummy multiplier
-    return launch(kernel_name, buffer, count, 1.0f);
+    return launch(kernel_name, buffer, count, 1.0f, elem_size);
 }
 
-bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count) {
+bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count, size_t elem_size) {
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
@@ -367,7 +367,7 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
     auto& pipeline_data = it->second;
 
     // Auto-register buffers if not already registered
-    size_t buffer_size = count * sizeof(float);  // Assume float elements
+    size_t buffer_size = count * elem_size;
     VkBuffer vk_in = memory_manager_->get_buffer(in_buffer);
     if (vk_in == VK_NULL_HANDLE && in_buffer != nullptr) {
         std::cerr << "[KernelLauncher] Auto-registering input buffer" << std::endl;
@@ -522,8 +522,10 @@ bool KernelLauncher::launch_with_captures(
     void* buffer,
     size_t count,
     void* captures,
-    size_t capture_size) {
+    size_t capture_size,
+    size_t elem_size) {
 
+    (void)elem_size;  // data buffer is expected to be pre-registered on this path
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
