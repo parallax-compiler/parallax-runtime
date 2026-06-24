@@ -1,0 +1,13 @@
+# Build directories
+build/
+build-*/
+out/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+
+# Editor / OS
+.DS_Store
+compile_commands.json

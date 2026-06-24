@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/karthikt/parallax-base/parallax-runtime/build/cmake_install.cmake",
-		"/Users/karthikt/parallax-base/parallax-runtime/build/tests/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
