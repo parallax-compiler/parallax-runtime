@@ -37,5 +37,9 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Test (software Vulkan)
+      - name: Test (software Vulkan, ASan)
+        env:
+          # Leak detection is deferred until the Phase 1e migration/coherence work
+          # removes the known per-launch buffer leak; memory-safety checks stay on.
+          ASAN_OPTIONS: detect_leaks=0
         run: ctest --test-dir build --output-on-failure

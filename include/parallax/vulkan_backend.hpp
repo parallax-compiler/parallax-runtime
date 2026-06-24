@@ -61,10 +61,14 @@ private:
     // is not installed we degrade gracefully instead of failing instance creation.
     bool validation_enabled_ = false;
 
-#ifdef PARALLAX_ENABLE_VALIDATION
+    // These are declared unconditionally so that sizeof(VulkanBackend) is the
+    // same in every translation unit. Guarding them with PARALLAX_ENABLE_VALIDATION
+    // made the class layout depend on a private compile flag, so a TU that did not
+    // see the flag allocated a smaller object than the constructor initialized —
+    // an ODR violation and stack-buffer overflow. The *code* that uses them stays
+    // guarded; only the data members must always be present.
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
     bool setup_debug_messenger();
-#endif
 };
 
 } // namespace parallax
