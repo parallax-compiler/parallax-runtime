@@ -27,8 +27,15 @@ int main() {
     CHECK(arena.valid(), "arena valid");
 
     const auto& caps = arena.capabilities();
-    std::printf("caps: int64=%d float64=%d bda=%d\n",
-                caps.shader_int64, caps.shader_float64, caps.buffer_device_address);
+    std::printf("caps: int64=%d float64=%d bda=%d device_address=0x%llx\n",
+                caps.shader_int64, caps.shader_float64, caps.buffer_device_address,
+                (unsigned long long)arena.device_address());
+
+    // When the device supports buffer_device_address, the arena must expose a
+    // non-zero GPU base address (the anchor Phase 2 relocates host pointers to).
+    if (caps.buffer_device_address) {
+        CHECK(arena.device_address() != 0, "device_address is non-zero when BDA supported");
+    }
 
     // Allocate two blocks; verify containment, ordering, alignment.
     auto* a = static_cast<int*>(arena.allocate(1000 * sizeof(int)));
