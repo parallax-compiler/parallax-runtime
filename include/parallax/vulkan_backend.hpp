@@ -10,10 +10,20 @@ namespace parallax {
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> compute_family;
-    
+
     bool is_complete() const {
         return compute_family.has_value();
     }
+};
+
+// Device capabilities relevant to codegen and the memory model. Detected from the
+// physical device during initialize(), before the logical device is created, so
+// that features like bufferDeviceAddress can be enabled when supported. Consumed
+// by the arena (buffer_device_address) and the compiler (int64/float64 gating).
+struct DeviceCapabilities {
+    bool shader_int64 = false;
+    bool shader_float64 = false;
+    bool buffer_device_address = false;
 };
 
 class VulkanBackend {
@@ -39,12 +49,14 @@ public:
     // Device info
     std::string device_name() const;
     uint32_t api_version() const;
-    
+    const DeviceCapabilities& capabilities() const { return capabilities_; }
+
 private:
     bool create_instance();
     bool select_physical_device();
     bool create_logical_device();
-    
+    void detect_capabilities();
+
     QueueFamilyIndices find_queue_families(VkPhysicalDevice device);
     bool is_device_suitable(VkPhysicalDevice device);
     
@@ -55,7 +67,8 @@ private:
     
     QueueFamilyIndices queue_indices_;
     VkPhysicalDeviceProperties device_properties_;
-    
+    DeviceCapabilities capabilities_;
+
     // True only when the validation layer is actually present at runtime. Built
     // with PARALLAX_ENABLE_VALIDATION we *request* validation, but if the layer
     // is not installed we degrade gracefully instead of failing instance creation.

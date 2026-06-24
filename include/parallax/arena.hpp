@@ -22,14 +22,9 @@
 
 namespace parallax {
 
-// Device capabilities relevant to codegen and the memory model. Detected from
-// the physical device at arena init and later consumed by the compiler so it
-// never silently emits unsupported types (e.g. Int64 truncation).
-struct DeviceCapabilities {
-    bool shader_int64 = false;
-    bool shader_float64 = false;
-    bool buffer_device_address = false;
-};
+// DeviceCapabilities is declared in vulkan_backend.hpp and detected by the
+// backend at device-creation time (the bufferDeviceAddress feature must be
+// enabled before the logical device is created).
 
 class UnifiedArena {
 public:
@@ -61,7 +56,10 @@ public:
     VkBuffer                  buffer() const { return buffer_; }
     VkDeviceSize              capacity() const { return capacity_; }
     VkDeviceSize              used() const { return high_water_; }
-    const DeviceCapabilities& capabilities() const { return caps_; }
+    // GPU base address of the arena (Phase 2 relocates host pointers against this).
+    // Zero when the device lacks buffer_device_address.
+    VkDeviceAddress           device_address() const { return device_address_; }
+    const DeviceCapabilities& capabilities() const { return backend_->capabilities(); }
     bool                      valid() const { return host_base_ != nullptr; }
 
 private:
@@ -71,18 +69,17 @@ private:
     };
 
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props) const;
-    void     detect_capabilities();
 
-    VulkanBackend* backend_ = nullptr;
-    VkBuffer       buffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory memory_ = VK_NULL_HANDLE;
-    void*          host_base_ = nullptr;
-    VkDeviceSize   capacity_ = 0;
-    VkDeviceSize   bump_ = 0;        // next never-used offset
-    VkDeviceSize   high_water_ = 0;  // bytes ever handed out (bump_ minus reuse)
+    VulkanBackend*  backend_ = nullptr;
+    VkBuffer        buffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory  memory_ = VK_NULL_HANDLE;
+    void*           host_base_ = nullptr;
+    VkDeviceAddress device_address_ = 0;
+    VkDeviceSize    capacity_ = 0;
+    VkDeviceSize    bump_ = 0;        // next never-used offset
+    VkDeviceSize    high_water_ = 0;  // bytes ever handed out (bump_ minus reuse)
     std::vector<Block>                      free_list_;    // reusable freed blocks
     std::unordered_map<void*, Block>        live_;         // ptr -> {offset,size}
-    DeviceCapabilities                      caps_;
     mutable std::mutex                      mutex_;
 };
 

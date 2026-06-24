@@ -28,7 +28,11 @@ bool VulkanBackend::initialize() {
         std::cerr << "Failed to find suitable GPU" << std::endl;
         return false;
     }
-    
+
+    // Must run after the physical device is known and before the logical device
+    // is created, so features (e.g. bufferDeviceAddress) can be enabled.
+    detect_capabilities();
+
     if (!create_logical_device()) {
         std::cerr << "Failed to create logical device" << std::endl;
         return false;
@@ -197,7 +201,19 @@ bool VulkanBackend::create_logical_device() {
     vulkan11_features.variablePointersStorageBuffer = VK_TRUE;
     vulkan11_features.variablePointers = VK_TRUE;
 
+    // Enable buffer_device_address when the device supports it — required for the
+    // Phase 2 physical-storage-buffer pointer model. Chained into pNext only when
+    // available so we never request an unsupported feature.
+    VkPhysicalDeviceBufferDeviceAddressFeatures bda_features{};
+    bda_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    bda_features.bufferDeviceAddress = VK_TRUE;
+    if (capabilities_.buffer_device_address) {
+        vulkan11_features.pNext = &bda_features;
+    }
+
     VkPhysicalDeviceFeatures device_features{};
+    device_features.shaderInt64 = capabilities_.shader_int64 ? VK_TRUE : VK_FALSE;
+    device_features.shaderFloat64 = capabilities_.shader_float64 ? VK_TRUE : VK_FALSE;
     
     // Extensions for MoltenVK
     std::vector<const char*> device_extensions;
@@ -240,6 +256,25 @@ std::string VulkanBackend::device_name() const {
 
 uint32_t VulkanBackend::api_version() const {
     return device_properties_.apiVersion;
+}
+
+void VulkanBackend::detect_capabilities() {
+    VkPhysicalDeviceFeatures feats{};
+    vkGetPhysicalDeviceFeatures(physical_device_, &feats);
+    capabilities_.shader_int64 = feats.shaderInt64 == VK_TRUE;
+    capabilities_.shader_float64 = feats.shaderFloat64 == VK_TRUE;
+
+    VkPhysicalDeviceBufferDeviceAddressFeatures bda{};
+    bda.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    VkPhysicalDeviceFeatures2 f2{};
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &bda;
+    vkGetPhysicalDeviceFeatures2(physical_device_, &f2);
+    capabilities_.buffer_device_address = bda.bufferDeviceAddress == VK_TRUE;
+
+    std::cout << "[Parallax] Device capabilities: int64=" << capabilities_.shader_int64
+              << " float64=" << capabilities_.shader_float64
+              << " buffer_device_address=" << capabilities_.buffer_device_address << std::endl;
 }
 
 #ifdef PARALLAX_ENABLE_VALIDATION

@@ -30,7 +30,8 @@ bool UnifiedArena::initialize(VulkanBackend* backend, VkDeviceSize capacity) {
     }
     capacity_ = align_up(capacity, kDefaultAlignment);
 
-    detect_capabilities();
+    const DeviceCapabilities& caps = backend_->capabilities();
+    const bool use_bda = caps.buffer_device_address;
 
     VkBufferCreateInfo buffer_info{};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -38,6 +39,9 @@ bool UnifiedArena::initialize(VulkanBackend* backend, VkDeviceSize capacity) {
     buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (use_bda) {
+        buffer_info.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    }
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(backend_->device(), &buffer_info, nullptr, &buffer_) != VK_SUCCESS) {
@@ -62,6 +66,15 @@ bool UnifiedArena::initialize(VulkanBackend* backend, VkDeviceSize capacity) {
     alloc_info.allocationSize = req.size;
     alloc_info.memoryTypeIndex = mem_type;
 
+    // Memory that backs a buffer_device_address buffer must be allocated with the
+    // device-address flag.
+    VkMemoryAllocateFlagsInfo flags_info{};
+    flags_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+    flags_info.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    if (use_bda) {
+        alloc_info.pNext = &flags_info;
+    }
+
     if (vkAllocateMemory(backend_->device(), &alloc_info, nullptr, &memory_) != VK_SUCCESS) {
         std::cerr << "[UnifiedArena] Failed to allocate " << capacity_ << " bytes" << std::endl;
         destroy();
@@ -69,6 +82,13 @@ bool UnifiedArena::initialize(VulkanBackend* backend, VkDeviceSize capacity) {
     }
 
     vkBindBufferMemory(backend_->device(), buffer_, memory_, 0);
+
+    if (use_bda) {
+        VkBufferDeviceAddressInfo addr_info{};
+        addr_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        addr_info.buffer = buffer_;
+        device_address_ = vkGetBufferDeviceAddress(backend_->device(), &addr_info);
+    }
 
     if (vkMapMemory(backend_->device(), memory_, 0, capacity_, 0, &host_base_) != VK_SUCCESS) {
         std::cerr << "[UnifiedArena] Failed to map arena memory" << std::endl;
@@ -79,9 +99,10 @@ bool UnifiedArena::initialize(VulkanBackend* backend, VkDeviceSize capacity) {
     bump_ = 0;
     high_water_ = 0;
     std::cout << "[UnifiedArena] Ready: " << (capacity_ / (1024 * 1024)) << " MiB, host_base="
-              << host_base_ << " (int64=" << caps_.shader_int64
-              << " float64=" << caps_.shader_float64
-              << " bda=" << caps_.buffer_device_address << ")" << std::endl;
+              << host_base_ << " device_address=0x" << std::hex << device_address_ << std::dec
+              << " (int64=" << caps.shader_int64
+              << " float64=" << caps.shader_float64
+              << " bda=" << caps.buffer_device_address << ")" << std::endl;
     return true;
 }
 
@@ -98,6 +119,7 @@ void UnifiedArena::destroy() {
         vkFreeMemory(backend_->device(), memory_, nullptr);
         memory_ = VK_NULL_HANDLE;
     }
+    device_address_ = 0;
     free_list_.clear();
     live_.clear();
     bump_ = high_water_ = capacity_ = 0;
@@ -180,23 +202,6 @@ uint32_t UnifiedArena::find_memory_type(uint32_t type_filter,
         }
     }
     return UINT32_MAX;
-}
-
-void UnifiedArena::detect_capabilities() {
-    VkPhysicalDevice pd = backend_->physical_device();
-
-    VkPhysicalDeviceFeatures feats{};
-    vkGetPhysicalDeviceFeatures(pd, &feats);
-    caps_.shader_int64 = feats.shaderInt64 == VK_TRUE;
-    caps_.shader_float64 = feats.shaderFloat64 == VK_TRUE;
-
-    VkPhysicalDeviceBufferDeviceAddressFeatures bda{};
-    bda.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
-    VkPhysicalDeviceFeatures2 f2{};
-    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    f2.pNext = &bda;
-    vkGetPhysicalDeviceFeatures2(pd, &f2);
-    caps_.buffer_device_address = bda.bufferDeviceAddress == VK_TRUE;
 }
 
 }  // namespace parallax
