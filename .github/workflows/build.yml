@@ -24,10 +24,8 @@ jobs:
             cmake ninja-build g++ \
             libvulkan-dev vulkan-tools mesa-vulkan-drivers
 
-      - name: Show Vulkan devices (lavapipe)
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-        run: vulkaninfo --summary || echo "vulkaninfo unavailable (non-fatal)"
+      - name: Show Vulkan devices (lavapipe, auto-discovered)
+        run: vulkaninfo --summary 2>&1 | head -40 || echo "vulkaninfo unavailable (non-fatal)"
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -36,6 +34,4 @@ jobs:
         run: cmake --build build -j
 
       - name: Test (software Vulkan)
-        env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: ctest --test-dir build --output-on-failure
