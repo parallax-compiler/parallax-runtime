@@ -56,6 +56,11 @@ private:
     QueueFamilyIndices queue_indices_;
     VkPhysicalDeviceProperties device_properties_;
     
+    // True only when the validation layer is actually present at runtime. Built
+    // with PARALLAX_ENABLE_VALIDATION we *request* validation, but if the layer
+    // is not installed we degrade gracefully instead of failing instance creation.
+    bool validation_enabled_ = false;
+
 #ifdef PARALLAX_ENABLE_VALIDATION
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
     bool setup_debug_messenger();

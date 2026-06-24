@@ -560,23 +560,162 @@ bool KernelLauncher::launch_with_captures(
             return false;
         }
 
-        // Update descriptor set (main buffer only)
-        VkDescriptorBufferInfo buffer_info{};
-        buffer_info.buffer = vk_buffer;
-        buffer_info.offset = 0;
-        buffer_info.range = VK_WHOLE_SIZE;
+        // Find decomposed vector pointers in captures struct
+        // Heuristic: Decomposed vectors are stored as {T* data, size_t size} pairs
+        // Look for pointer + size_t patterns, or standalone pointers
+        std::vector<void*> captured_buffers;
+        if (captures != nullptr && capture_size >= sizeof(void*)) {
+            const size_t num_fields = capture_size / sizeof(void*);
+            void** ptr_array = static_cast<void**>(captures);
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = descriptor_set;
-        write.dstBinding = 0;
-        write.dstArrayElement = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.descriptorCount = 1;
-        write.pBufferInfo = &buffer_info;
+            std::cout << "[KernelLauncher] Analyzing captures struct: size=" << capture_size
+                      << " bytes, num_fields=" << num_fields << std::endl;
 
-        vkUpdateDescriptorSets(backend_->device(), 1, &write, 0, nullptr);
+            for (size_t i = 0; i < num_fields; ++i) {
+                void* potential_ptr = ptr_array[i];
+
+                // Check if there's a next field that could be a size
+                size_t potential_size = 0;
+                if (i + 1 < num_fields) {
+                    potential_size = reinterpret_cast<size_t*>(ptr_array)[i + 1];
+                }
+
+                std::cout << "[KernelLauncher]   Field " << i << ": ptr=" << potential_ptr;
+                if (i + 1 < num_fields) {
+                    std::cout << ", next_value=" << potential_size;
+                }
+                std::cout << std::endl;
+
+                // Check if this looks like a decomposed vector: pointer + reasonable size
+                if (potential_ptr != nullptr && i + 1 < num_fields && potential_size > 0 && potential_size < 1000000000) {
+                    VkBuffer test_buffer = memory_manager_->get_buffer(potential_ptr);
+
+                    std::cout << "[KernelLauncher]   Looks like decomposed vector. VkBuffer="
+                              << (void*)test_buffer << std::endl;
+
+                    // If not registered, try to register it
+                    if (test_buffer == VK_NULL_HANDLE) {
+                        std::cout << "[KernelLauncher] Auto-registering captured buffer at offset "
+                                  << (i * sizeof(void*)) << ", size=" << potential_size << " elements" << std::endl;
+
+                        // Estimate element size - assume float or struct (try common sizes)
+                        // For now, assume the size field is in elements, and element is at least 4 bytes
+                        size_t byte_size = potential_size;
+                        if (potential_size < 1000000) {  // Likely in elements, not bytes
+                            byte_size = potential_size * sizeof(float) * 4;  // Assume Body-like struct (~28 bytes)
+                        }
+
+                        memory_manager_->register_external_buffer(potential_ptr, byte_size);
+                        test_buffer = memory_manager_->get_buffer(potential_ptr);
+
+                        std::cout << "[KernelLauncher] After registration: VkBuffer="
+                                  << (void*)test_buffer << std::endl;
+                    }
+
+                    if (test_buffer != VK_NULL_HANDLE) {
+                        captured_buffers.push_back(potential_ptr);
+                        std::cout << "[KernelLauncher] Found captured buffer pointer at offset "
+                                  << (i * sizeof(void*)) << std::endl;
+                        i++;  // Skip the size field
+                    }
+                }
+                // Fallback: check if this is just a standalone buffer pointer (not a vector decomposition)
+                else if (potential_ptr != nullptr) {
+                    VkBuffer test_buffer = memory_manager_->get_buffer(potential_ptr);
+                    if (test_buffer != VK_NULL_HANDLE) {
+                        captured_buffers.push_back(potential_ptr);
+                        std::cout << "[KernelLauncher] Found standalone captured buffer pointer at offset "
+                                  << (i * sizeof(void*)) << std::endl;
+                    }
+                }
+            }
+        }
+
+        // Prepare descriptor writes
+        std::vector<VkWriteDescriptorSet> writes;
+        std::vector<VkDescriptorBufferInfo> buffer_infos;
+
+        // Reserve space to prevent reallocation (important! pointers must remain valid)
+        buffer_infos.reserve(3);
+        writes.reserve(3);
+
+        // Binding 0: Main buffer (storage buffer)
+        buffer_infos.push_back({vk_buffer, 0, VK_WHOLE_SIZE});
+        VkWriteDescriptorSet write0{};
+        write0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write0.dstSet = descriptor_set;
+        write0.dstBinding = 0;
+        write0.dstArrayElement = 0;
+        write0.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write0.descriptorCount = 1;
+        write0.pBufferInfo = &buffer_infos[0];
+        writes.push_back(write0);
+
+        // Binding 1: Captured buffer (storage buffer) - if any
+        if (!captured_buffers.empty()) {
+            VkBuffer captured_vk_buffer = memory_manager_->get_buffer(captured_buffers[0]);
+            buffer_infos.push_back({captured_vk_buffer, 0, VK_WHOLE_SIZE});
+
+            VkWriteDescriptorSet write1{};
+            write1.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write1.dstSet = descriptor_set;
+            write1.dstBinding = 1;
+            write1.dstArrayElement = 0;
+            write1.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write1.descriptorCount = 1;
+            write1.pBufferInfo = &buffer_infos[1];
+            writes.push_back(write1);
+
+            std::cout << "[KernelLauncher] Binding captured buffer to binding 1" << std::endl;
+        }
+
+        // Binding 2: Captures uniform buffer
+        VkBuffer captures_uniform_buffer = VK_NULL_HANDLE;
+        VkDeviceMemory captures_uniform_memory = VK_NULL_HANDLE;
+
+        VkBufferCreateInfo uniform_buf_info{};
+        uniform_buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        uniform_buf_info.size = std::max<size_t>(capture_size, 64); // At least 64 bytes
+        uniform_buf_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        uniform_buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        vkCreateBuffer(backend_->device(), &uniform_buf_info, nullptr, &captures_uniform_buffer);
+
+        VkMemoryRequirements mem_reqs;
+        vkGetBufferMemoryRequirements(backend_->device(), captures_uniform_buffer, &mem_reqs);
+
+        VkMemoryAllocateInfo mem_alloc{};
+        mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mem_alloc.allocationSize = mem_reqs.size;
+        mem_alloc.memoryTypeIndex = memory_manager_->find_memory_type(mem_reqs.memoryTypeBits,
+                                                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        vkAllocateMemory(backend_->device(), &mem_alloc, nullptr, &captures_uniform_memory);
+        vkBindBufferMemory(backend_->device(), captures_uniform_buffer, captures_uniform_memory, 0);
+
+        // Copy captures data to uniform buffer
+        if (capture_size > 0 && captures != nullptr) {
+            void* mapped_data;
+            vkMapMemory(backend_->device(), captures_uniform_memory, 0, capture_size, 0, &mapped_data);
+            std::memcpy(mapped_data, captures, capture_size);
+            vkUnmapMemory(backend_->device(), captures_uniform_memory);
+        }
+
+        buffer_infos.push_back({captures_uniform_buffer, 0, VK_WHOLE_SIZE});
+        VkWriteDescriptorSet write2{};
+        write2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write2.dstSet = descriptor_set;
+        write2.dstBinding = 2;
+        write2.dstArrayElement = 0;
+        write2.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write2.descriptorCount = 1;
+        write2.pBufferInfo = &buffer_infos[buffer_infos.size() - 1];  // Use correct index
+        writes.push_back(write2);
+
+        vkUpdateDescriptorSets(backend_->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         descriptor_cache_[key] = descriptor_set;
+
+        // TODO: Clean up captures_uniform_buffer and captures_uniform_memory later
     }
 
     // Wait for previous operations if any
@@ -595,25 +734,11 @@ bool KernelLauncher::launch_with_captures(
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
 
-    // Push constants: count + captured parameters
-    // Layout: { uint32 count, <capture_data bytes> }
-    std::vector<uint8_t> push_data;
-    push_data.resize(sizeof(uint32_t) + capture_size);
-
-    // Pack count
-    uint32_t count_u32 = static_cast<uint32_t>(count);
-    std::memcpy(push_data.data(), &count_u32, sizeof(uint32_t));
-
-    // Pack captures
-    if (capture_size > 0 && captures != nullptr) {
-        std::memcpy(push_data.data() + sizeof(uint32_t), captures, capture_size);
-        std::cout << "[KernelLauncher] Packed " << capture_size 
-                  << " bytes of capture data into push constants" << std::endl;
-    }
-
-    vkCmdPushConstants(command_buffer_, pipeline_data.layout, 
-                      VK_SHADER_STAGE_COMPUTE_BIT, 0, 
-                      push_data.size(), push_data.data());
+    // Push constants: only count (captures moved to uniform buffer binding 2!)
+    uint32_t push_count = static_cast<uint32_t>(count);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout,
+                      VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                      sizeof(uint32_t), &push_count);
 
     // Dispatch compute shader (256 threads per workgroup)
     uint32_t workgroup_count = (count + 255) / 256;

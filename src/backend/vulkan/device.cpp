@@ -18,7 +18,7 @@ bool VulkanBackend::initialize() {
     }
     
 #ifdef PARALLAX_ENABLE_VALIDATION
-    if (!setup_debug_messenger()) {
+    if (validation_enabled_ && !setup_debug_messenger()) {
         std::cerr << "Failed to setup debug messenger" << std::endl;
         return false;
     }
@@ -85,26 +85,49 @@ bool VulkanBackend::create_instance() {
     create_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
     
+    static const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
+
 #ifdef PARALLAX_ENABLE_VALIDATION
-    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    
-    const char* validation_layers[] = {"VK_LAYER_KHRONOS_validation"};
-    create_info.enabledLayerCount = 1;
-    create_info.ppEnabledLayerNames = validation_layers;
-#else
-    create_info.enabledLayerCount = 0;
+    // Enable the validation layer only if it is actually installed. Requesting a
+    // missing layer makes vkCreateInstance fail with VK_ERROR_LAYER_NOT_PRESENT
+    // (-6); we would rather run without validation than not run at all.
+    {
+        uint32_t layer_count = 0;
+        vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
+        std::vector<VkLayerProperties> available_layers(layer_count);
+        vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data());
+        for (const auto& layer : available_layers) {
+            if (std::strcmp(layer.layerName, kValidationLayer) == 0) {
+                validation_enabled_ = true;
+                break;
+            }
+        }
+    }
+    if (!validation_enabled_) {
+        std::cerr << "[Parallax] Validation layer '" << kValidationLayer
+                  << "' not present; continuing without validation" << std::endl;
+    }
 #endif
-    
+
+    const char* validation_layers[] = {kValidationLayer};
+    if (validation_enabled_) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        create_info.enabledLayerCount = 1;
+        create_info.ppEnabledLayerNames = validation_layers;
+    } else {
+        create_info.enabledLayerCount = 0;
+    }
+
     create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     create_info.ppEnabledExtensionNames = extensions.data();
-    
+
     VkResult result = vkCreateInstance(&create_info, nullptr, &instance_);
-    
+
     if (result != VK_SUCCESS) {
         std::cerr << "vkCreateInstance failed with error code: " << result << std::endl;
         std::cerr << "Note: On macOS, ensure MoltenVK is installed (brew install molten-vk)" << std::endl;
     }
-    
+
     return result == VK_SUCCESS;
 }
 
@@ -191,14 +214,16 @@ bool VulkanBackend::create_logical_device() {
     create_info.enabledExtensionCount = static_cast<uint32_t>(device_extensions.size());
     create_info.ppEnabledExtensionNames = device_extensions.data();
     
-#ifdef PARALLAX_ENABLE_VALIDATION
+    // Device-level layers are deprecated and ignored by modern loaders, but set
+    // them consistently with the instance only when validation is actually active.
     const char* validation_layers[] = {"VK_LAYER_KHRONOS_validation"};
-    create_info.enabledLayerCount = 1;
-    create_info.ppEnabledLayerNames = validation_layers;
-#else
-    create_info.enabledLayerCount = 0;
-#endif
-    
+    if (validation_enabled_) {
+        create_info.enabledLayerCount = 1;
+        create_info.ppEnabledLayerNames = validation_layers;
+    } else {
+        create_info.enabledLayerCount = 0;
+    }
+
     VkResult result = vkCreateDevice(physical_device_, &create_info, nullptr, &device_);
     if (result != VK_SUCCESS) {
         std::cerr << "vkCreateDevice failed with error code: " << result << std::endl;
