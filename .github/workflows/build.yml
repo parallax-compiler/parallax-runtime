@@ -1,0 +1,41 @@
+name: Runtime Build
+
+# Builds the Parallax Vulkan runtime and runs its unit test. GitHub runners have
+# no physical GPU, so we install Mesa lavapipe (a software Vulkan implementation)
+# to exercise the device path. The unit test is GPU-optional and returns success
+# when no device is present, so this job gates on a clean build + run.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + software Vulkan (lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build g++ \
+            libvulkan-dev vulkan-tools mesa-vulkan-drivers
+
+      - name: Show Vulkan devices (lavapipe)
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: vulkaninfo --summary || echo "vulkaninfo unavailable (non-fatal)"
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test (software Vulkan)
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: ctest --test-dir build --output-on-failure
