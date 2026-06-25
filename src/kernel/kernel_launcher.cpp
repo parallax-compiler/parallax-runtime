@@ -1,4 +1,6 @@
 #include "parallax/kernel_launcher.hpp"
+#include "parallax/runtime.hpp"
+#include "parallax/arena.hpp"
 #include <iostream>
 #include <fstream>
 #include <cstring>
@@ -225,23 +227,36 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
 
     auto& pipeline_data = it->second;
 
-    // Auto-register buffer if not already registered
-    VkBuffer vk_buffer = memory_manager_->get_buffer(buffer);
-    if (vk_buffer == VK_NULL_HANDLE && buffer != nullptr) {
-        std::cerr << "[KernelLauncher] Auto-registering buffer (elem_size=" << elem_size << ")" << std::endl;
-        size_t buffer_size = count * elem_size;
-        memory_manager_->register_external_buffer(buffer, buffer_size);
+    // Phase 2c: if the data is arena-backed (e.g. via allocation interposition),
+    // bind the arena buffer directly at the allocation's offset (zero-copy unified
+    // memory) instead of copying it into a fresh Vulkan buffer.
+    parallax::UnifiedArena* arena = parallax::get_global_arena();
+    const bool arena_backed = arena && buffer && arena->contains(buffer);
+
+    VkBuffer vk_buffer = VK_NULL_HANDLE;
+    VkDeviceSize data_offset = 0;
+    VkDeviceSize data_range = static_cast<VkDeviceSize>(count) * elem_size;
+
+    if (arena_backed) {
+        vk_buffer = arena->buffer();
+        data_offset = arena->offset_of(buffer);
+        std::cout << "[KernelLauncher] Zero-copy arena bind (offset=" << data_offset
+                  << ", range=" << data_range << ")" << std::endl;
+    } else {
         vk_buffer = memory_manager_->get_buffer(buffer);
+        if (vk_buffer == VK_NULL_HANDLE && buffer != nullptr) {
+            std::cerr << "[KernelLauncher] Auto-registering buffer (elem_size=" << elem_size << ")" << std::endl;
+            memory_manager_->register_external_buffer(buffer, data_range);
+            vk_buffer = memory_manager_->get_buffer(buffer);
+        }
+        if (vk_buffer == VK_NULL_HANDLE) {
+            std::cerr << "Invalid buffer after auto-registration" << std::endl;
+            return false;
+        }
+        // Sync dirty blocks before kernel (host-coherent arena needs no sync).
+        memory_manager_->sync_before_kernel(buffer);
     }
 
-    if (vk_buffer == VK_NULL_HANDLE) {
-        std::cerr << "Invalid buffer after auto-registration" << std::endl;
-        return false;
-    }
-    
-    // Sync dirty blocks before kernel
-    memory_manager_->sync_before_kernel(buffer);
-    
     // Check descriptor cache
     CacheKey key{pipeline_data.descriptor_set_layout, buffer};
     VkDescriptorSet descriptor_set;
@@ -264,8 +279,8 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     // Update descriptor set
     VkDescriptorBufferInfo buffer_info{};
     buffer_info.buffer = vk_buffer;
-    buffer_info.offset = 0;
-    buffer_info.range = VK_WHOLE_SIZE;
+    buffer_info.offset = data_offset;
+    buffer_info.range = data_range;
 
     // Create a small dummy uniform buffer for captures (empty for now)
     VkBuffer dummy_uniform_buffer = VK_NULL_HANDLE;
