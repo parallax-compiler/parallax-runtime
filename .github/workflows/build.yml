@@ -46,6 +46,12 @@ jobs:
         # own allocator interceptor — it is run in the non-ASan build below.
         run: ctest --test-dir build --output-on-failure -E Interpose
 
+      # TEMP: show the reduce test's actual output to prove it executes on the
+      # device (not a clean skip). Remove once Phase 3 reduce is verified.
+      - name: "DIAG: reduce output"
+        env: { ASAN_OPTIONS: detect_leaks=0 }
+        run: ctest --test-dir build -R ParallelReduce --verbose 2>&1 | grep -iE "reduce result|PASS:|SKIP:|Reducing kernel|loaded kernel" || true
+
       # Allocation interposition replaces operator new, so it cannot run under
       # ASan (ASan owns operator new). Build + run it without sanitizers.
       - name: Configure + build + test (no ASan, interposition)
