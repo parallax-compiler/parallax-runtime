@@ -42,4 +42,14 @@ jobs:
           # Leak detection is deferred until the Phase 1e migration/coherence work
           # removes the known per-launch buffer leak; memory-safety checks stay on.
           ASAN_OPTIONS: detect_leaks=0
-        run: ctest --test-dir build --output-on-failure
+        # The Interpose test overrides operator new, which conflicts with ASan's
+        # own allocator interceptor — it is run in the non-ASan build below.
+        run: ctest --test-dir build --output-on-failure -E Interpose
+
+      # Allocation interposition replaces operator new, so it cannot run under
+      # ASan (ASan owns operator new). Build + run it without sanitizers.
+      - name: Configure + build + test (no ASan, interposition)
+        run: |
+          cmake -S . -B build-nosan -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-nosan -j
+          ctest --test-dir build-nosan --output-on-failure -R Interpose
