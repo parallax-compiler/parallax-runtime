@@ -7,6 +7,31 @@
 
 namespace parallax {
 
+namespace {
+// Push-constant block shared by all compute dispatches. Mirrors the compiler's
+// setup_push_constants layout: count @0, host_base @8, dev_base @16. Ordinary
+// kernels read only count; pointer-chasing kernels relocate stored host pointers
+// with gpu = dev_base + (host_ptr - host_base), so the arena bases travel here.
+struct PushBlock {
+    uint32_t count;
+    uint32_t pad;
+    uint64_t host_base;
+    uint64_t dev_base;
+};
+static_assert(sizeof(PushBlock) == 24, "push-constant block must be 24 bytes");
+
+PushBlock make_push_block(size_t count) {
+    PushBlock pc{};
+    pc.count = static_cast<uint32_t>(count);
+    UnifiedArena* arena = get_global_arena();
+    if (arena) {
+        pc.host_base = reinterpret_cast<uint64_t>(arena->host_base());
+        pc.dev_base = static_cast<uint64_t>(arena->device_address());
+    }
+    return pc;
+}
+}  // namespace
+
 KernelLauncher::KernelLauncher(VulkanBackend* backend, MemoryManager* memory_manager)
     : backend_(backend), memory_manager_(memory_manager) {
     
@@ -163,11 +188,15 @@ bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_
         return false;
     }
 
-    // Create pipeline layout with push constants (only count, no captures!)
+    // Create pipeline layout with push constants. Layout (matches the compiler's
+    // setup_push_constants): { uint count @0, uint64 host_base @8, uint64 dev_base
+    // @16 }. Ordinary kernels only read count@0; pointer-chasing kernels also read
+    // the arena bases to relocate stored host pointers. The range is sized for the
+    // superset so a single pipeline layout serves both.
     VkPushConstantRange push_constant{};
     push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     push_constant.offset = 0;
-    push_constant.size = 4; // Only 1 uint32_t (count) - captures moved to uniform buffer!
+    push_constant.size = 24;
     
     VkPipelineLayoutCreateInfo pipeline_layout_info{};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -349,10 +378,10 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
 
-    // Push constants: only count (captures moved to uniform buffer!)
-    uint32_t push_count = static_cast<uint32_t>(count);
-    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &push_count);
-    
+    // Push constants: count + arena bases (for pointer-chasing relocation).
+    PushBlock push = make_push_block(count);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+
     // Dispatch compute shader (256 threads per workgroup)
     uint32_t workgroup_count = (count + 255) / 256;
     vkCmdDispatch(command_buffer_, workgroup_count, 1, 1);
@@ -524,10 +553,10 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
 
-    // Push constants: only count (captures moved to uniform buffer!)
-    uint32_t push_count = static_cast<uint32_t>(count);
-    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(uint32_t), &push_count);
-    
+    // Push constants: count + arena bases (for pointer-chasing relocation).
+    PushBlock push = make_push_block(count);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+
     // Dispatch
     uint32_t workgroup_count = (count + 255) / 256;
     vkCmdDispatch(command_buffer_, workgroup_count, 1, 1);
@@ -769,11 +798,11 @@ bool KernelLauncher::launch_with_captures(
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
 
-    // Push constants: only count (captures moved to uniform buffer binding 2!)
-    uint32_t push_count = static_cast<uint32_t>(count);
+    // Push constants: count + arena bases (for pointer-chasing relocation).
+    PushBlock push = make_push_block(count);
     vkCmdPushConstants(command_buffer_, pipeline_data.layout,
                       VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                      sizeof(uint32_t), &push_count);
+                      sizeof(push), &push);
 
     // Dispatch compute shader (256 threads per workgroup)
     uint32_t workgroup_count = (count + 255) / 256;
