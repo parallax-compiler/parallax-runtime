@@ -1,0 +1,41 @@
+#version 460
+// Phase 3 de-risk: a real parallel reduction primitive in SPIR-V. Each workgroup
+// loads up to 256 elements into shared memory, performs a logarithmic tree
+// reduction with barriers, and writes one partial per workgroup. The runtime
+// dispatches this iteratively (data -> partials -> ... -> single scalar), so no
+// atomics are needed and the result is exact for the '+' identity 0.0.
+//
+// Binding layout matches the runtime's compute descriptor set:
+//   binding 0: input  (read)   binding 1: partials (write)   binding 2: unused
+// Push constant { uint count } lives at offset 0 (same block as every kernel).
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly  buffer InBuf  { float indata[]; };
+layout(set = 0, binding = 1) writeonly buffer OutBuf { float partials[]; };
+
+layout(push_constant) uniform PC { uint count; };
+
+shared float sdata[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+
+    // Load this thread's element (identity 0.0 past the end).
+    sdata[tid] = (gid < count) ? indata[gid] : 0.0;
+    barrier();
+
+    // In-place tree reduction within the workgroup.
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        barrier();
+    }
+
+    // Workgroup leader writes the partial sum.
+    if (tid == 0u) {
+        partials[gl_WorkGroupID.x] = sdata[0];
+    }
+}

@@ -825,4 +825,168 @@ bool KernelLauncher::launch_with_captures(
     return true;
 }
 
+bool KernelLauncher::dispatch_reduce_level(PipelineData& pipeline_data,
+                                           VkBuffer src_buf, VkDeviceSize src_off, VkDeviceSize src_range,
+                                           VkBuffer dst_buf, VkDeviceSize dst_off, VkDeviceSize dst_range,
+                                           uint32_t count, uint32_t groups) {
+    // Allocate a fresh descriptor set for this level (src/dst differ each level).
+    VkDescriptorSetAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = descriptor_pool_;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &pipeline_data.descriptor_set_layout;
+    VkDescriptorSet descriptor_set;
+    if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
+        std::cerr << "[reduce] Failed to allocate descriptor set" << std::endl;
+        return false;
+    }
+
+    VkDescriptorBufferInfo infos[2]{};
+    infos[0].buffer = src_buf; infos[0].offset = src_off; infos[0].range = src_range;
+    infos[1].buffer = dst_buf; infos[1].offset = dst_off; infos[1].range = dst_range;
+
+    // Binding 2 (captures uniform) is unused by the reduce kernel but present in
+    // the shared descriptor layout; bind a small dummy so the set is complete.
+    VkBuffer dummy_buf = VK_NULL_HANDLE;
+    VkDeviceMemory dummy_mem = VK_NULL_HANDLE;
+    VkBufferCreateInfo ubi{};
+    ubi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    ubi.size = 64;
+    ubi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    ubi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(backend_->device(), &ubi, nullptr, &dummy_buf);
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(backend_->device(), dummy_buf, &mr);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = memory_manager_->find_memory_type(
+        mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(backend_->device(), &mai, nullptr, &dummy_mem);
+    vkBindBufferMemory(backend_->device(), dummy_buf, dummy_mem, 0);
+    VkDescriptorBufferInfo dummy_info{dummy_buf, 0, VK_WHOLE_SIZE};
+    transient_buffers_.emplace_back(dummy_buf, dummy_mem);
+
+    VkWriteDescriptorSet writes[3]{};
+    for (int i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = descriptor_set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].descriptorCount = 1;
+        writes[i].pBufferInfo = &infos[i];
+    }
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = descriptor_set;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[2].descriptorCount = 1;
+    writes[2].pBufferInfo = &dummy_info;
+    vkUpdateDescriptorSets(backend_->device(), 3, writes, 0, nullptr);
+
+    sync();
+    vkResetFences(backend_->device(), 1, &fence_);
+    vkResetCommandBuffer(command_buffer_, 0);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(command_buffer_, &begin_info);
+    vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
+    vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
+    PushBlock push = make_push_block(count);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(push), &push);
+    vkCmdDispatch(command_buffer_, groups, 1, 1);
+    vkEndCommandBuffer(command_buffer_);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer_;
+    if (vkQueueSubmit(backend_->compute_queue(), 1, &submit_info, fence_) != VK_SUCCESS) {
+        std::cerr << "[reduce] Failed to submit command buffer" << std::endl;
+        return false;
+    }
+    fence_signaled_ = false;
+    sync();  // each level depends on the previous one's output
+    return true;
+}
+
+bool KernelLauncher::launch_reduce(const std::string& kernel_name, void* data, size_t count,
+                                   size_t elem_size, void* out_result) {
+    auto it = pipelines_.find(kernel_name);
+    if (it == pipelines_.end()) {
+        std::cerr << "Kernel not found: " << kernel_name << std::endl;
+        return false;
+    }
+    auto& pipeline_data = it->second;
+
+    if (count == 0) { std::memset(out_result, 0, elem_size); return true; }
+    if (count == 1) { std::memcpy(out_result, data, elem_size); return true; }
+
+    UnifiedArena* arena = get_global_arena();
+    if (!arena || !arena->valid()) {
+        std::cerr << "[reduce] requires the unified arena (scratch buffers)" << std::endl;
+        return false;
+    }
+
+    // Two ping-pong scratch buffers in the arena, each large enough for one
+    // level's partials (first level is the largest).
+    size_t first_groups = (count + 255) / 256;
+    void* scratch[2];
+    scratch[0] = arena->allocate(first_groups * elem_size, 256);
+    scratch[1] = arena->allocate(((first_groups + 255) / 256 + 1) * elem_size, 256);
+    if (!scratch[0] || !scratch[1]) {
+        std::cerr << "[reduce] arena scratch allocation failed" << std::endl;
+        return false;
+    }
+
+    void*  src = data;
+    size_t n = count;
+    int    toggle = 0;
+    while (n > 1) {
+        uint32_t groups = static_cast<uint32_t>((n + 255) / 256);
+        void* dst = scratch[toggle];
+
+        // Resolve src binding (arena zero-copy, else register external buffer).
+        VkBuffer src_buf; VkDeviceSize src_off; VkDeviceSize src_range = n * elem_size;
+        if (arena->contains(src)) {
+            src_buf = arena->buffer();
+            src_off = arena->offset_of(src);
+        } else {
+            VkBuffer reg = memory_manager_->get_buffer(src);
+            if (reg == VK_NULL_HANDLE) {
+                memory_manager_->register_external_buffer(src, n * elem_size);
+                reg = memory_manager_->get_buffer(src);
+            }
+            if (reg == VK_NULL_HANDLE) { std::cerr << "[reduce] bad src buffer" << std::endl; return false; }
+            memory_manager_->sync_before_kernel(src);
+            src_buf = reg; src_off = 0; src_range = VK_WHOLE_SIZE;
+        }
+
+        // dst is always arena scratch -> zero-copy bind at its offset.
+        VkBuffer dst_buf = arena->buffer();
+        VkDeviceSize dst_off = arena->offset_of(dst);
+        VkDeviceSize dst_range = static_cast<VkDeviceSize>(groups) * elem_size;
+
+        if (!dispatch_reduce_level(pipeline_data, src_buf, src_off, src_range,
+                                   dst_buf, dst_off, dst_range,
+                                   static_cast<uint32_t>(n), groups)) {
+            return false;
+        }
+
+        src = dst;
+        n = groups;
+        toggle ^= 1;
+    }
+
+    // src now holds the single reduced element in host-coherent arena memory.
+    std::memcpy(out_result, src, elem_size);
+    arena->deallocate(scratch[0]);
+    arena->deallocate(scratch[1]);
+    return true;
+}
+
 } // namespace parallax

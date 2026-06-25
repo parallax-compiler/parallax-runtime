@@ -21,6 +21,13 @@ parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words);
 void parallax_kernel_launch(parallax_kernel_t kernel, ...);
 void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...);
 
+/* Parallel reduction (Phase 3). Reduces `count` elements of `data` to a single
+ * scalar using the loaded workgroup-reduction kernel, writing elem_size bytes to
+ * `result`. The kernel uses the '+' identity (0); the caller combines any init.
+ */
+void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
+                     size_t elem_size, void* result);
+
 /* NEW V2: Kernel execution with captured parameters */
 void parallax_kernel_launch_with_captures(
     parallax_kernel_t kernel,

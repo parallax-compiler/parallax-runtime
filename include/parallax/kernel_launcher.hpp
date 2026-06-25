@@ -48,10 +48,26 @@ public:
         size_t elem_size = sizeof(float)
     );
 
+    // Parallel reduction (Phase 3). Reduces `count` elements of the data buffer to
+    // a single scalar by dispatching the workgroup-reduction kernel iteratively
+    // (data -> partials -> ... -> one element), ping-ponging through arena scratch.
+    // The single reduced value (elem_size bytes) is written to out_result. The
+    // kernel applies the '+' identity, so the caller combines any init separately.
+    bool launch_reduce(const std::string& kernel_name, void* data, size_t count,
+                       size_t elem_size, void* out_result);
+
     // Synchronize all pending operations
     void sync();
-    
+
 private:
+    // One level of the iterative reduction: bind src@0 / dst@1, dispatch `groups`
+    // workgroups over `count` elements. src/dst are already resolved to a VkBuffer
+    // plus byte offset/range (arena zero-copy or registered external buffer).
+    bool dispatch_reduce_level(PipelineData& pipeline_data,
+                               VkBuffer src_buf, VkDeviceSize src_off, VkDeviceSize src_range,
+                               VkBuffer dst_buf, VkDeviceSize dst_off, VkDeviceSize dst_range,
+                               uint32_t count, uint32_t groups);
+
     VulkanBackend* backend_;
     MemoryManager* memory_manager_;
     

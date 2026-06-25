@@ -189,6 +189,20 @@ void parallax_kernel_launch_with_captures(
     std::cout << "[parallax_kernel_launch_with_captures] Kernel completed successfully" << std::endl;
 }
 
+void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
+                     size_t elem_size, void* result) {
+    if (!kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_reduce] Invalid kernel or launcher not initialized" << std::endl;
+        return;
+    }
+    auto* handle = reinterpret_cast<KernelHandle*>(kernel);
+    std::cout << "[parallax_reduce] Reducing kernel: " << handle->name
+              << " count=" << count << " elem_size=" << elem_size << std::endl;
+    if (!g_kernel_launcher->launch_reduce(handle->name, data, count, elem_size, result)) {
+        std::cerr << "[parallax_reduce] reduction failed" << std::endl;
+    }
+}
+
 bool parallax_register_buffer(void* ptr, size_t size) {
     auto* memory_manager = parallax::get_global_memory_manager();
     if (!memory_manager) {

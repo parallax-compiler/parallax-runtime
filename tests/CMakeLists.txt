@@ -38,7 +38,23 @@ if(GLSLANG)
     target_compile_definitions(test_physptr PRIVATE RELOCATE_SPV="${RELOCATE_SPV}")
     target_link_libraries(test_physptr PRIVATE parallax-runtime)
     add_test(NAME PhysPtrRelocation COMMAND test_physptr)
+
+    # Phase 3: parallel reduction primitive (workgroup tree reduction).
+    set(REDUCE_SPV ${CMAKE_CURRENT_BINARY_DIR}/reduce.spv)
+    add_custom_command(
+        OUTPUT ${REDUCE_SPV}
+        COMMAND ${GLSLANG} -V --target-env vulkan1.2
+                ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/reduce.comp -o ${REDUCE_SPV}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/reduce.comp
+        COMMENT "Compiling reduce.comp -> reduce.spv")
+    add_custom_target(reduce_spv DEPENDS ${REDUCE_SPV})
+
+    add_executable(test_reduce unit/test_reduce.cpp)
+    add_dependencies(test_reduce reduce_spv)
+    target_compile_definitions(test_reduce PRIVATE REDUCE_SPV="${REDUCE_SPV}")
+    target_link_libraries(test_reduce PRIVATE parallax-runtime)
+    add_test(NAME ParallelReduce COMMAND test_reduce)
 else()
-    message(STATUS "glslangValidator not found; skipping PhysPtrRelocation test")
+    message(STATUS "glslangValidator not found; skipping PhysPtrRelocation/ParallelReduce tests")
 endif()
 
