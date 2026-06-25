@@ -53,7 +53,25 @@ KernelLauncher::KernelLauncher(VulkanBackend* backend, MemoryManager* memory_man
     vkCreateFence(backend_->device(), &fence_info, nullptr, &fence_);
 }
 
+void KernelLauncher::retire_transient_buffers() {
+    if (transient_buffers_.empty()) return;
+    // These scratch buffers are referenced by cached descriptor sets, so they live
+    // for the launcher's lifetime and are reclaimed here at teardown. If the device
+    // has already been torn down (static-destruction order), just drop the handles.
+    if (!backend_ || backend_->device() == VK_NULL_HANDLE) {
+        transient_buffers_.clear();
+        return;
+    }
+    vkDeviceWaitIdle(backend_->device());
+    for (auto& [buf, mem] : transient_buffers_) {
+        if (buf != VK_NULL_HANDLE) vkDestroyBuffer(backend_->device(), buf, nullptr);
+        if (mem != VK_NULL_HANDLE) vkFreeMemory(backend_->device(), mem, nullptr);
+    }
+    transient_buffers_.clear();
+}
+
 KernelLauncher::~KernelLauncher() {
+    retire_transient_buffers();
     std::cout << "[KernelLauncher] Destructor: Cleaning up " << pipelines_.size() << " pipelines" << std::endl;
 
     // Clean up pipelines
@@ -298,7 +316,7 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     vkUpdateDescriptorSets(backend_->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     descriptor_cache_[key] = descriptor_set;
 
-    // TODO: Clean up dummy_uniform_buffer and dummy_uniform_memory later
+    transient_buffers_.emplace_back(dummy_uniform_buffer, dummy_uniform_memory);
     
     // Wait for previous operations if any
     sync();
@@ -472,7 +490,7 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
         vkUpdateDescriptorSets(backend_->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         descriptor_cache_[key] = descriptor_set;
 
-        // TODO: Clean up dummy buffers later
+        transient_buffers_.emplace_back(dummy_uniform_buffer, dummy_uniform_memory);
     }
     
     // Wait for previous operations if any
@@ -717,7 +735,7 @@ bool KernelLauncher::launch_with_captures(
         vkUpdateDescriptorSets(backend_->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         descriptor_cache_[key] = descriptor_set;
 
-        // TODO: Clean up captures_uniform_buffer and captures_uniform_memory later
+        transient_buffers_.emplace_back(captures_uniform_buffer, captures_uniform_memory);
     }
 
     // Wait for previous operations if any

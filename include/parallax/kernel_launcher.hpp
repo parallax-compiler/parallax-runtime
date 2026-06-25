@@ -78,6 +78,12 @@ private:
     VkCommandBuffer command_buffer_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
     bool fence_signaled_ = true;
+
+    // Per-launch scratch buffers (capture uniforms). Retired and destroyed by
+    // retire_transient_buffers() once prior work has completed, and at teardown,
+    // so they are not leaked past device destruction.
+    std::vector<std::pair<VkBuffer, VkDeviceMemory>> transient_buffers_;
+    void retire_transient_buffers();
 };
 
 } // namespace parallax
