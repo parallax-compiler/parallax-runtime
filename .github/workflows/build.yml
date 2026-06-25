@@ -50,6 +50,13 @@ jobs:
       # ASan (ASan owns operator new). Build + run it without sanitizers.
       - name: Configure + build + test (no ASan, interposition)
         run: |
+          sudo apt-get install -y gdb || true
           cmake -S . -B build-nosan -G Ninja -DCMAKE_BUILD_TYPE=Debug
           cmake --build build-nosan -j
-          ctest --test-dir build-nosan --output-on-failure -R Interpose
+          export LD_LIBRARY_PATH="$PWD/build-nosan:$LD_LIBRARY_PATH"
+          echo "=== direct run ==="
+          ./build-nosan/tests/test_interpose || {
+            echo "=== gdb backtrace ==="
+            gdb -batch -ex run -ex bt --args ./build-nosan/tests/test_interpose || true
+            exit 1
+          }
