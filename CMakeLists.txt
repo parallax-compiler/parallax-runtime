@@ -60,3 +60,9 @@ install(DIRECTORY include/parallax
     DESTINATION include
 )
 
+# Opt-in allocation interposition (Phase 1d). Link this to route C++ heap
+# allocations through the unified-memory arena.
+add_library(parallax-interpose SHARED src/memory/interpose.cpp)
+target_link_libraries(parallax-interpose PUBLIC parallax-runtime)
+install(TARGETS parallax-interpose LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+

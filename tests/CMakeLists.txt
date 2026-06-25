@@ -15,3 +15,8 @@ add_executable(test_arena unit/test_arena.cpp)
 target_link_libraries(test_arena PRIVATE parallax-runtime)
 add_test(NAME UnifiedArena COMMAND test_arena)
 
+# Allocation interposition (operator new -> arena)
+add_executable(test_interpose unit/test_interpose.cpp)
+target_link_libraries(test_interpose PRIVATE parallax-interpose parallax-runtime)
+add_test(NAME Interpose COMMAND test_interpose)
+

@@ -2,6 +2,7 @@
 #include "parallax/runtime.h"
 #include "parallax/unified_buffer.hpp"
 #include "parallax/vulkan_backend.hpp"
+#include "parallax/arena.hpp"
 #include <cstdlib>
 #include <memory>
 #include <iostream>
@@ -11,6 +12,7 @@ namespace parallax {
 // Global runtime state (exposed for testing)
 static std::unique_ptr<VulkanBackend> g_backend;
 static std::unique_ptr<MemoryManager> g_memory_manager;
+static std::unique_ptr<UnifiedArena> g_arena;
 static bool g_initialized = false;
 
 static bool ensure_initialized() {
@@ -38,7 +40,39 @@ MemoryManager* get_global_memory_manager() {
     return g_memory_manager.get();
 }
 
+UnifiedArena* get_global_arena() {
+    if (!ensure_initialized()) return nullptr;
+    if (!g_arena) {
+        g_arena = std::make_unique<UnifiedArena>();
+        if (!g_arena->initialize(g_backend.get())) {
+            g_arena.reset();
+            return nullptr;
+        }
+    }
+    return g_arena.get();
+}
+
 } // namespace parallax
+
+extern "C" {
+
+// C accessors used by the opt-in allocation-interposition library (Phase 1d).
+void* parallax_arena_alloc(size_t size, size_t align) {
+    auto* arena = parallax::get_global_arena();
+    return arena ? arena->allocate(size, align ? align : 16) : nullptr;
+}
+
+void parallax_arena_free(void* ptr) {
+    auto* arena = parallax::get_global_arena();
+    if (arena) arena->deallocate(ptr);
+}
+
+int parallax_arena_contains(const void* ptr) {
+    auto* arena = parallax::get_global_arena();
+    return (arena && arena->contains(ptr)) ? 1 : 0;
+}
+
+}  // extern "C"
 
 using namespace parallax;
 
