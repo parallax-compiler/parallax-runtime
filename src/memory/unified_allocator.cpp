@@ -15,18 +15,29 @@ static std::unique_ptr<MemoryManager> g_memory_manager;
 static std::unique_ptr<UnifiedArena> g_arena;
 static bool g_initialized = false;
 
+static bool g_initializing = false;
+static bool g_arena_initializing = false;
+
 static bool ensure_initialized() {
     if (g_initialized) return true;
-    
+    // Vulkan initialization itself allocates; with allocation interposition active
+    // those allocations re-enter here. Report "not ready" on re-entry so they fall
+    // back to the system allocator instead of re-initializing (and corrupting) the
+    // half-built backend.
+    if (g_initializing) return false;
+    g_initializing = true;
+
     g_backend = std::make_unique<VulkanBackend>();
     if (!g_backend->initialize()) {
         // Vulkan unavailable - CPU fallback will be used
         g_backend.reset();
+        g_initializing = false;
         return false;
     }
-    
+
     g_memory_manager = std::make_unique<MemoryManager>(g_backend.get());
     g_initialized = true;
+    g_initializing = false;
     return true;
 }
 
@@ -41,14 +52,21 @@ MemoryManager* get_global_memory_manager() {
 }
 
 UnifiedArena* get_global_arena() {
+    if (g_arena) return g_arena.get();
+    // Creating the arena (buffer + bookkeeping) allocates; under interposition that
+    // re-enters here. Report "not ready" on re-entry so those allocations fall back
+    // to the system allocator rather than recursively building another arena.
+    if (g_arena_initializing) return nullptr;
     if (!ensure_initialized()) return nullptr;
-    if (!g_arena) {
-        g_arena = std::make_unique<UnifiedArena>();
-        if (!g_arena->initialize(g_backend.get())) {
-            g_arena.reset();
-            return nullptr;
-        }
+
+    g_arena_initializing = true;
+    auto arena = std::make_unique<UnifiedArena>();
+    if (!arena->initialize(g_backend.get())) {
+        g_arena_initializing = false;
+        return nullptr;
     }
+    g_arena = std::move(arena);
+    g_arena_initializing = false;
     return g_arena.get();
 }
 
