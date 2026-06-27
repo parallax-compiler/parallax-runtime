@@ -145,6 +145,30 @@ void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...) {
     std::cout << "[parallax_kernel_launch_transform] Kernel completed successfully" << std::endl;
 }
 
+// Transform with distinct input/output element sizes (e.g. float -> double). Fixed
+// signature (not variadic) so the in/out sizes are unambiguous.
+void parallax_kernel_launch_transform2(parallax_kernel_t kernel, void* in_buffer,
+                                       void* out_buffer, size_t count,
+                                       size_t in_elem_size, size_t out_elem_size) {
+    if (!kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_kernel_launch_transform2] Invalid kernel or launcher" << std::endl;
+        return;
+    }
+    auto* handle = reinterpret_cast<KernelHandle*>(kernel);
+    std::cout << "[parallax_kernel_launch_transform2] Launching kernel: " << handle->name
+              << " in_elem=" << in_elem_size << " out_elem=" << out_elem_size
+              << " count=" << count << std::endl;
+    if (!g_kernel_launcher->launch_transform(handle->name, in_buffer, out_buffer, count,
+                                             in_elem_size, out_elem_size)) {
+        std::cerr << "[parallax_kernel_launch_transform2] Failed to launch kernel" << std::endl;
+        return;
+    }
+    g_kernel_launcher->sync();
+    auto* mm = parallax::get_global_memory_manager();
+    if (mm) mm->sync_after_kernel(out_buffer);
+    std::cout << "[parallax_kernel_launch_transform2] Kernel completed successfully" << std::endl;
+}
+
 // NEW V2: Kernel launch with captured parameters (for function objects)
 void parallax_kernel_launch_with_captures(
     parallax_kernel_t kernel,

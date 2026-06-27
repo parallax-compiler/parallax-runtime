@@ -419,7 +419,7 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     return launch(kernel_name, buffer, count, 1.0f, elem_size);
 }
 
-bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count, size_t elem_size) {
+bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count, size_t elem_size, size_t out_elem_size) {
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
@@ -428,19 +428,22 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
 
     auto& pipeline_data = it->second;
 
-    // Auto-register buffers if not already registered
-    size_t buffer_size = count * elem_size;
+    // Auto-register buffers if not already registered. The output element size may
+    // differ from the input (e.g. float -> double), so size each buffer separately.
+    if (out_elem_size == 0) out_elem_size = elem_size;
+    size_t in_size = count * elem_size;
+    size_t out_size = count * out_elem_size;
     VkBuffer vk_in = memory_manager_->get_buffer(in_buffer);
     if (vk_in == VK_NULL_HANDLE && in_buffer != nullptr) {
         std::cerr << "[KernelLauncher] Auto-registering input buffer" << std::endl;
-        memory_manager_->register_external_buffer(in_buffer, buffer_size);
+        memory_manager_->register_external_buffer(in_buffer, in_size);
         vk_in = memory_manager_->get_buffer(in_buffer);
     }
 
     VkBuffer vk_out = memory_manager_->get_buffer(out_buffer);
     if (vk_out == VK_NULL_HANDLE && out_buffer != nullptr) {
         std::cerr << "[KernelLauncher] Auto-registering output buffer" << std::endl;
-        memory_manager_->register_external_buffer(out_buffer, buffer_size);
+        memory_manager_->register_external_buffer(out_buffer, out_size);
         vk_out = memory_manager_->get_buffer(out_buffer);
     }
 

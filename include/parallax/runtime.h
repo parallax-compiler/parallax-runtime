@@ -20,6 +20,10 @@ void parallax_ufree(void* ptr);
 parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words);
 void parallax_kernel_launch(parallax_kernel_t kernel, ...);
 void parallax_kernel_launch_transform(parallax_kernel_t kernel, ...);
+/* Transform with distinct input/output element sizes (e.g. float -> double). */
+void parallax_kernel_launch_transform2(parallax_kernel_t kernel, void* in_buffer,
+                                       void* out_buffer, size_t count,
+                                       size_t in_elem_size, size_t out_elem_size);
 
 /* Parallel reduction (Phase 3). Reduces `count` elements of `data` to a single
  * scalar using the loaded workgroup-reduction kernel, writing elem_size bytes to
