@@ -227,6 +227,21 @@ void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
     }
 }
 
+void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
+                   void* data, size_t count, size_t elem_size) {
+    if (!scan_kernel || !add_kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_scan] invalid kernels or launcher" << std::endl;
+        return;
+    }
+    auto* sh = reinterpret_cast<KernelHandle*>(scan_kernel);
+    auto* ah = reinterpret_cast<KernelHandle*>(add_kernel);
+    std::cout << "[parallax_scan] scan=" << sh->name << " add=" << ah->name
+              << " count=" << count << " elem_size=" << elem_size << std::endl;
+    if (!g_kernel_launcher->launch_scan(sh->name, ah->name, data, count, elem_size)) {
+        std::cerr << "[parallax_scan] scan failed" << std::endl;
+    }
+}
+
 bool parallax_register_buffer(void* ptr, size_t size) {
     auto* memory_manager = parallax::get_global_memory_manager();
     if (!memory_manager) {

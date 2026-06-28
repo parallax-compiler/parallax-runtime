@@ -1,0 +1,20 @@
+#version 460
+// Phase 5: add each block's exclusive prefix offset back after the per-block scan.
+// `offsets` is the inclusive scan of the block sums, so offsets[wg-1] is the sum of
+// all blocks before block wg = the exclusive offset to add to every element of it.
+// Block 0 needs no offset.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Data    { float data[]; };
+layout(set = 0, binding = 1) buffer Offsets { float offsets[]; };
+
+layout(push_constant) uniform PC { uint count; };
+
+void main() {
+    uint gid  = gl_GlobalInvocationID.x;
+    uint wgid = gl_WorkGroupID.x;
+    if (gid < count && wgid > 0u) {
+        data[gid] += offsets[wgid - 1u];
+    }
+}

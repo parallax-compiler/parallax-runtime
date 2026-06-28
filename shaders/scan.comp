@@ -1,0 +1,36 @@
+#version 460
+// Phase 5: inclusive prefix scan, per workgroup (Hillis-Steele). Each workgroup
+// scans its 256-element chunk in place and the last thread writes the chunk total
+// to blocksums[workgroup]. The runtime then scans blocksums and adds the exclusive
+// block offsets back (scan_add.comp) to produce the global inclusive scan.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Data      { float data[]; };
+layout(set = 0, binding = 1) buffer BlockSums { float blocksums[]; };
+
+layout(push_constant) uniform PC { uint count; };
+
+shared float temp[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+
+    temp[tid] = (gid < count) ? data[gid] : 0.0;
+    barrier();
+
+    // In-place inclusive Hillis-Steele scan over the workgroup.
+    for (uint offset = 1u; offset < 256u; offset <<= 1) {
+        float v = 0.0;
+        if (tid >= offset) v = temp[tid - offset];
+        barrier();              // all reads of old values complete
+        temp[tid] += v;
+        barrier();              // all writes complete before next round
+    }
+
+    if (gid < count) data[gid] = temp[tid];
+
+    // temp[255] is the chunk total (out-of-range lanes contributed 0).
+    if (tid == 255u) blocksums[gl_WorkGroupID.x] = temp[255u];
+}

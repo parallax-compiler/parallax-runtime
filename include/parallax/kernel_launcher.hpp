@@ -57,6 +57,13 @@ public:
     bool launch_reduce(const std::string& kernel_name, void* data, size_t count,
                        size_t elem_size, void* out_result);
 
+    // Inclusive prefix scan (Phase 5). Scans `data` in place: per-block scan
+    // (scan_kernel) writing block totals, scan of those totals, then add the
+    // exclusive block offsets back (add_kernel). MVP: count <= 256*256 (the block
+    // sums fit one workgroup). Scratch is taken from the arena.
+    bool launch_scan(const std::string& scan_kernel, const std::string& add_kernel,
+                     void* data, size_t count, size_t elem_size);
+
     // Synchronize all pending operations
     void sync();
 

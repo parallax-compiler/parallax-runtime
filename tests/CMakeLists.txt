@@ -54,6 +54,23 @@ if(GLSLANG)
     target_compile_definitions(test_reduce PRIVATE REDUCE_SPV="${REDUCE_SPV}")
     target_link_libraries(test_reduce PRIVATE parallax-runtime)
     add_test(NAME ParallelReduce COMMAND test_reduce)
+
+    # Phase 5: inclusive prefix scan (per-block scan + add block offsets).
+    set(SCAN_SPV ${CMAKE_CURRENT_BINARY_DIR}/scan.spv)
+    set(SCAN_ADD_SPV ${CMAKE_CURRENT_BINARY_DIR}/scan_add.spv)
+    add_custom_command(OUTPUT ${SCAN_SPV}
+        COMMAND ${GLSLANG} -V --target-env vulkan1.2 ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/scan.comp -o ${SCAN_SPV}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/scan.comp COMMENT "Compiling scan.comp")
+    add_custom_command(OUTPUT ${SCAN_ADD_SPV}
+        COMMAND ${GLSLANG} -V --target-env vulkan1.2 ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/scan_add.comp -o ${SCAN_ADD_SPV}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/scan_add.comp COMMENT "Compiling scan_add.comp")
+    add_custom_target(scan_spv DEPENDS ${SCAN_SPV} ${SCAN_ADD_SPV})
+
+    add_executable(test_scan unit/test_scan.cpp)
+    add_dependencies(test_scan scan_spv)
+    target_compile_definitions(test_scan PRIVATE SCAN_SPV="${SCAN_SPV}" SCAN_ADD_SPV="${SCAN_ADD_SPV}")
+    target_link_libraries(test_scan PRIVATE parallax-runtime)
+    add_test(NAME ParallelScan COMMAND test_scan)
 else()
     message(STATUS "glslangValidator not found; skipping PhysPtrRelocation/ParallelReduce tests")
 endif()

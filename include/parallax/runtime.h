@@ -32,6 +32,11 @@ void parallax_kernel_launch_transform2(parallax_kernel_t kernel, void* in_buffer
 void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
                      size_t elem_size, void* result);
 
+/* Inclusive prefix scan (Phase 5). Scans `data` in place using two kernels: a
+ * per-block scan and an add-block-offsets pass. */
+void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
+                   void* data, size_t count, size_t elem_size);
+
 /* NEW V2: Kernel execution with captured parameters */
 void parallax_kernel_launch_with_captures(
     parallax_kernel_t kernel,

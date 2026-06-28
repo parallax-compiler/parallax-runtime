@@ -992,4 +992,70 @@ bool KernelLauncher::launch_reduce(const std::string& kernel_name, void* data, s
     return true;
 }
 
+bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::string& add_kernel,
+                                 void* data, size_t count, size_t elem_size) {
+    auto sit = pipelines_.find(scan_kernel);
+    auto ait = pipelines_.find(add_kernel);
+    if (sit == pipelines_.end() || ait == pipelines_.end()) {
+        std::cerr << "[scan] kernel not found" << std::endl;
+        return false;
+    }
+    if (count <= 1) return true;  // inclusive scan of <=1 element is the identity
+
+    UnifiedArena* arena = get_global_arena();
+    if (!arena || !arena->valid()) { std::cerr << "[scan] requires arena" << std::endl; return false; }
+
+    const uint32_t num_blocks = static_cast<uint32_t>((count + 255) / 256);
+    if (num_blocks > 256) {
+        std::cerr << "[scan] count exceeds the single-level block-sum limit (256*256)" << std::endl;
+        return false;
+    }
+
+    // Resolve the in-place data buffer (arena zero-copy, else register + upload).
+    const bool data_in_arena = arena->contains(data);
+    VkBuffer data_buf; VkDeviceSize data_off; VkDeviceSize data_range = count * elem_size;
+    if (data_in_arena) {
+        data_buf = arena->buffer();
+        data_off = arena->offset_of(data);
+    } else {
+        VkBuffer reg = memory_manager_->get_buffer(data);
+        if (reg == VK_NULL_HANDLE) { memory_manager_->register_external_buffer(data, data_range); reg = memory_manager_->get_buffer(data); }
+        if (reg == VK_NULL_HANDLE) { std::cerr << "[scan] bad data buffer" << std::endl; return false; }
+        memory_manager_->sync_before_kernel(data);
+        data_buf = reg; data_off = 0; data_range = VK_WHOLE_SIZE;
+    }
+
+    void* blocksums = arena->allocate(num_blocks * elem_size, 256);
+    void* dummy = arena->allocate(elem_size, 256);
+    if (!blocksums || !dummy) { std::cerr << "[scan] scratch alloc failed" << std::endl; return false; }
+    VkBuffer bs_buf = arena->buffer();
+    VkDeviceSize bs_off = arena->offset_of(blocksums);
+    VkDeviceSize bs_range = static_cast<VkDeviceSize>(num_blocks) * elem_size;
+
+    // Pass 1: per-block inclusive scan of data (in place) + write block totals.
+    if (!dispatch_reduce_level(sit->second, data_buf, data_off, data_range,
+                               bs_buf, bs_off, bs_range,
+                               static_cast<uint32_t>(count), num_blocks))
+        return false;
+
+    if (num_blocks > 1) {
+        // Pass 2: inclusive scan of the block sums (single workgroup, in place).
+        VkBuffer dm_buf = arena->buffer();
+        VkDeviceSize dm_off = arena->offset_of(dummy);
+        if (!dispatch_reduce_level(sit->second, bs_buf, bs_off, bs_range,
+                                   dm_buf, dm_off, elem_size, num_blocks, 1))
+            return false;
+        // Pass 3: add each block's exclusive offset (= scanned blocksums[wg-1]).
+        if (!dispatch_reduce_level(ait->second, data_buf, data_off, data_range,
+                                   bs_buf, bs_off, bs_range,
+                                   static_cast<uint32_t>(count), num_blocks))
+            return false;
+    }
+
+    if (!data_in_arena) memory_manager_->sync_after_kernel(data);  // download in-place result
+    arena->deallocate(blocksums);
+    arena->deallocate(dummy);
+    return true;
+}
+
 } // namespace parallax
