@@ -64,6 +64,12 @@ public:
     bool launch_scan(const std::string& scan_kernel, const std::string& add_kernel,
                      void* data, size_t count, size_t elem_size);
 
+    // Bitonic sort (Phase 5). Sorts `data` in place ascending. The kernel is a
+    // global compare-exchange stage dispatched O(log^2 n) times over the (k,j)
+    // schedule. MVP: count must be a power of two (the caller pads otherwise).
+    bool launch_sort(const std::string& kernel_name, void* data, size_t count,
+                     size_t elem_size);
+
     // Synchronize all pending operations
     void sync();
 
@@ -75,6 +81,13 @@ private:
                                VkBuffer src_buf, VkDeviceSize src_off, VkDeviceSize src_range,
                                VkBuffer dst_buf, VkDeviceSize dst_off, VkDeviceSize dst_range,
                                uint32_t count, uint32_t groups);
+
+    // One bitonic compare-exchange stage: bind `data` at binding 0 (and a dummy at
+    // 1/2 to complete the shared layout), push { count, k, j }, dispatch `groups`
+    // workgroups. The kernel swaps each in-pair element with its i^j partner.
+    bool dispatch_sort_stage(PipelineData& pipeline_data,
+                             VkBuffer data_buf, VkDeviceSize data_off, VkDeviceSize data_range,
+                             uint32_t count, uint32_t k, uint32_t j, uint32_t groups);
 
     VulkanBackend* backend_;
     MemoryManager* memory_manager_;

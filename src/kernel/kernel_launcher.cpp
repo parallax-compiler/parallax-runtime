@@ -1058,4 +1058,134 @@ bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::stri
     return true;
 }
 
+// Push block for the bitonic stage: { uint count, uint k, uint j } (12 bytes, fits
+// the shared 24-byte push range). k/j select the compare-exchange schedule.
+namespace { struct SortPush { uint32_t count; uint32_t k; uint32_t j; }; }
+
+bool KernelLauncher::dispatch_sort_stage(PipelineData& pipeline_data,
+                                         VkBuffer data_buf, VkDeviceSize data_off, VkDeviceSize data_range,
+                                         uint32_t count, uint32_t k, uint32_t j, uint32_t groups) {
+    VkDescriptorSetAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = descriptor_pool_;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &pipeline_data.descriptor_set_layout;
+    VkDescriptorSet descriptor_set;
+    if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
+        std::cerr << "[sort] Failed to allocate descriptor set" << std::endl;
+        return false;
+    }
+
+    // The kernel uses only binding 0; bind the same buffer at 1 and a dummy uniform
+    // at 2 so the shared 3-binding layout is fully populated (validation-clean).
+    VkDescriptorBufferInfo infos[2]{};
+    infos[0].buffer = data_buf; infos[0].offset = data_off; infos[0].range = data_range;
+    infos[1] = infos[0];
+
+    VkBuffer dummy_buf = VK_NULL_HANDLE;
+    VkDeviceMemory dummy_mem = VK_NULL_HANDLE;
+    VkBufferCreateInfo ubi{};
+    ubi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    ubi.size = 64;
+    ubi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    ubi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(backend_->device(), &ubi, nullptr, &dummy_buf);
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(backend_->device(), dummy_buf, &mr);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = memory_manager_->find_memory_type(
+        mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(backend_->device(), &mai, nullptr, &dummy_mem);
+    vkBindBufferMemory(backend_->device(), dummy_buf, dummy_mem, 0);
+    VkDescriptorBufferInfo dummy_info{dummy_buf, 0, VK_WHOLE_SIZE};
+    transient_buffers_.emplace_back(dummy_buf, dummy_mem);
+
+    VkWriteDescriptorSet writes[3]{};
+    for (int i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = descriptor_set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].descriptorCount = 1;
+        writes[i].pBufferInfo = &infos[i];
+    }
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = descriptor_set;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[2].descriptorCount = 1;
+    writes[2].pBufferInfo = &dummy_info;
+    vkUpdateDescriptorSets(backend_->device(), 3, writes, 0, nullptr);
+
+    sync();
+    vkResetFences(backend_->device(), 1, &fence_);
+    vkResetCommandBuffer(command_buffer_, 0);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(command_buffer_, &begin_info);
+    vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
+    vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
+    SortPush push{count, k, j};
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(push), &push);
+    vkCmdDispatch(command_buffer_, groups, 1, 1);
+    vkEndCommandBuffer(command_buffer_);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer_;
+    if (vkQueueSubmit(backend_->compute_queue(), 1, &submit_info, fence_) != VK_SUCCESS) {
+        std::cerr << "[sort] Failed to submit command buffer" << std::endl;
+        return false;
+    }
+    fence_signaled_ = false;
+    sync();  // each stage depends on the previous stage's writes
+    return true;
+}
+
+bool KernelLauncher::launch_sort(const std::string& kernel_name, void* data, size_t count,
+                                 size_t elem_size) {
+    auto it = pipelines_.find(kernel_name);
+    if (it == pipelines_.end()) { std::cerr << "[sort] kernel not found" << std::endl; return false; }
+    if (count <= 1) return true;  // already sorted
+
+    // MVP: bitonic sort requires a power-of-two element count.
+    if ((count & (count - 1)) != 0) {
+        std::cerr << "[sort] count " << count << " is not a power of two (MVP limit)" << std::endl;
+        return false;
+    }
+
+    UnifiedArena* arena = get_global_arena();
+    const bool data_in_arena = arena && arena->valid() && arena->contains(data);
+    VkBuffer data_buf; VkDeviceSize data_off; VkDeviceSize data_range = count * elem_size;
+    if (data_in_arena) {
+        data_buf = arena->buffer();
+        data_off = arena->offset_of(data);
+    } else {
+        VkBuffer reg = memory_manager_->get_buffer(data);
+        if (reg == VK_NULL_HANDLE) { memory_manager_->register_external_buffer(data, data_range); reg = memory_manager_->get_buffer(data); }
+        if (reg == VK_NULL_HANDLE) { std::cerr << "[sort] bad data buffer" << std::endl; return false; }
+        memory_manager_->sync_before_kernel(data);
+        data_buf = reg; data_off = 0; data_range = VK_WHOLE_SIZE;
+    }
+
+    const uint32_t n = static_cast<uint32_t>(count);
+    const uint32_t groups = (n + 255) / 256;
+    for (uint32_t k = 2; k <= n; k <<= 1) {
+        for (uint32_t j = k >> 1; j > 0; j >>= 1) {
+            if (!dispatch_sort_stage(it->second, data_buf, data_off, data_range, n, k, j, groups))
+                return false;
+        }
+    }
+
+    if (!data_in_arena) memory_manager_->sync_after_kernel(data);
+    return true;
+}
+
 } // namespace parallax

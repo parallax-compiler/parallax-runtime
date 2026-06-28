@@ -1,0 +1,30 @@
+#version 460
+// Phase 5: one global compare-exchange stage of a bitonic sort (ascending). The
+// runtime dispatches this kernel once per (k, j) of the bitonic schedule
+//   for (k = 2; k <= n; k <<= 1) for (j = k >> 1; j > 0; j >>= 1) dispatch(k, j);
+// Each invocation owns index i; its partner is i ^ j. Only the lower index of the
+// pair performs the swap so the exchange happens once. `count` (= n) must be a
+// power of two for bitonic correctness; the runtime pads up to the next one.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Data { float data[]; };
+
+layout(push_constant) uniform PC { uint count; uint k; uint j; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= count) return;
+    uint l = i ^ j;
+    if (l > i && l < count) {
+        // Direction: ascending when the k-bit of i is 0, descending otherwise —
+        // this is what builds and merges the bitonic sequences into sorted order.
+        bool ascending = ((i & k) == 0u);
+        float a = data[i];
+        float b = data[l];
+        if ((a > b) == ascending) {  // out of order for this segment's direction
+            data[i] = b;
+            data[l] = a;
+        }
+    }
+}

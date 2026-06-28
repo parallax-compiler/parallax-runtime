@@ -71,6 +71,19 @@ if(GLSLANG)
     target_compile_definitions(test_scan PRIVATE SCAN_SPV="${SCAN_SPV}" SCAN_ADD_SPV="${SCAN_ADD_SPV}")
     target_link_libraries(test_scan PRIVATE parallax-runtime)
     add_test(NAME ParallelScan COMMAND test_scan)
+
+    # Phase 5: bitonic sort (global compare-exchange stage).
+    set(BITONIC_SPV ${CMAKE_CURRENT_BINARY_DIR}/bitonic.spv)
+    add_custom_command(OUTPUT ${BITONIC_SPV}
+        COMMAND ${GLSLANG} -V --target-env vulkan1.2 ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/bitonic.comp -o ${BITONIC_SPV}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/bitonic.comp COMMENT "Compiling bitonic.comp")
+    add_custom_target(bitonic_spv DEPENDS ${BITONIC_SPV})
+
+    add_executable(test_sort unit/test_sort.cpp)
+    add_dependencies(test_sort bitonic_spv)
+    target_compile_definitions(test_sort PRIVATE BITONIC_SPV="${BITONIC_SPV}")
+    target_link_libraries(test_sort PRIVATE parallax-runtime)
+    add_test(NAME ParallelSort COMMAND test_sort)
 else()
     message(STATUS "glslangValidator not found; skipping PhysPtrRelocation/ParallelReduce tests")
 endif()

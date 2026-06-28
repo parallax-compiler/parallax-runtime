@@ -242,6 +242,19 @@ void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
     }
 }
 
+void parallax_sort(parallax_kernel_t kernel, void* data, size_t count, size_t elem_size) {
+    if (!kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_sort] invalid kernel or launcher" << std::endl;
+        return;
+    }
+    auto* h = reinterpret_cast<KernelHandle*>(kernel);
+    std::cout << "[parallax_sort] kernel=" << h->name << " count=" << count
+              << " elem_size=" << elem_size << std::endl;
+    if (!g_kernel_launcher->launch_sort(h->name, data, count, elem_size)) {
+        std::cerr << "[parallax_sort] sort failed" << std::endl;
+    }
+}
+
 bool parallax_register_buffer(void* ptr, size_t size) {
     auto* memory_manager = parallax::get_global_memory_manager();
     if (!memory_manager) {

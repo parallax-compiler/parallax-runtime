@@ -37,6 +37,11 @@ void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
 void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
                    void* data, size_t count, size_t elem_size);
 
+/* Bitonic sort (Phase 5). Sorts `data` in place ascending; `count` must be a power
+ * of two (the caller pads otherwise). The kernel is a global compare-exchange stage
+ * dispatched over the bitonic (k, j) schedule. */
+void parallax_sort(parallax_kernel_t kernel, void* data, size_t count, size_t elem_size);
+
 /* NEW V2: Kernel execution with captured parameters */
 void parallax_kernel_launch_with_captures(
     parallax_kernel_t kernel,
