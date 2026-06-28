@@ -16,6 +16,13 @@ typedef struct parallax_kernel* parallax_kernel_t;
 void* parallax_umalloc(size_t size, unsigned flags);
 void parallax_ufree(void* ptr);
 
+/* Unified-arena allocation (host-mapped, GPU-addressable). Memory returned here is
+ * zero-copy for kernel launches. Used by allocation interposition and by generated
+ * code that needs arena-backed scratch (e.g. sort padding). */
+void* parallax_arena_alloc(size_t size, size_t align);
+void parallax_arena_free(void* ptr);
+int parallax_arena_contains(const void* ptr);
+
 /* Kernel execution */
 parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words);
 void parallax_kernel_launch(parallax_kernel_t kernel, ...);
