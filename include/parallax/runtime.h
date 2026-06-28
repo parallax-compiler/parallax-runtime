@@ -49,6 +49,14 @@ void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
  * dispatched over the bitonic (k, j) schedule. */
 void parallax_sort(parallax_kernel_t kernel, void* data, size_t count, size_t elem_size);
 
+/* Stream compaction / copy_if (Phase 5). flags_kernel writes 1/0 per element,
+ * scan_kernel+add_kernel produce output positions, scatter_kernel writes each kept
+ * element to the compacted output. input/output are arena-backed. Returns the number
+ * of elements written to `output`. */
+size_t parallax_copy_if(parallax_kernel_t flags_kernel, parallax_kernel_t scan_kernel,
+                        parallax_kernel_t add_kernel, parallax_kernel_t scatter_kernel,
+                        void* input, void* output, size_t count, size_t elem_size);
+
 /* NEW V2: Kernel execution with captured parameters */
 void parallax_kernel_launch_with_captures(
     parallax_kernel_t kernel,

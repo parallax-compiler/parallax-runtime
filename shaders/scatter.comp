@@ -1,0 +1,23 @@
+#version 460
+// Phase 5 compaction: scatter kept elements to their compacted positions. `pos` is
+// the INCLUSIVE scan of the 1/0 flags, so element i was kept iff pos[i]-pos[i-1]==1,
+// and its 0-based destination is pos[i]-1. Reads input@0 and positions@3, writes the
+// compacted output@1 (a separate buffer — in-place would race since dst <= i).
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer In  { float indata[]; };
+layout(set = 0, binding = 1) buffer Out { float outdata[]; };
+layout(set = 0, binding = 3) buffer Pos { float pos[]; };
+
+layout(push_constant) uniform PC { uint count; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= count) return;
+    float incl = pos[i];
+    float prev = (i > 0u) ? pos[i - 1u] : 0.0;
+    if (incl - prev > 0.5) {                  // this element passed the predicate
+        outdata[uint(incl) - 1u] = indata[i];
+    }
+}

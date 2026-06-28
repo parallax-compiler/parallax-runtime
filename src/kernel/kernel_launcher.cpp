@@ -38,7 +38,7 @@ KernelLauncher::KernelLauncher(VulkanBackend* backend, MemoryManager* memory_man
     // Create descriptor pool with support for both storage and uniform buffers
     std::vector<VkDescriptorPoolSize> pool_sizes(2);
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    pool_sizes[0].descriptorCount = 2048; // For data buffers
+    pool_sizes[0].descriptorCount = 6144; // up to 3 storage bindings per set
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     pool_sizes[1].descriptorCount = 2048; // For captures buffers
 
@@ -163,7 +163,10 @@ bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_
     // Create descriptor set layout
     // Binding 0-1: Storage buffers for data (in/out)
     // Binding 2: Uniform buffer for captures
-    std::vector<VkDescriptorSetLayoutBinding> bindings(3);
+    // Binding 3: Storage buffer for a third array (compaction scatter: positions).
+    //   Existing kernels never declare/access binding 3, so per the Vulkan spec they
+    //   need not write it — the 2-storage dispatch paths are unaffected (additive).
+    std::vector<VkDescriptorSetLayoutBinding> bindings(4);
     for (int i = 0; i < 2; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -175,6 +178,11 @@ bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // Binding 3: third storage buffer (compaction only).
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1185,6 +1193,154 @@ bool KernelLauncher::launch_sort(const std::string& kernel_name, void* data, siz
     }
 
     if (!data_in_arena) memory_manager_->sync_after_kernel(data);
+    return true;
+}
+
+bool KernelLauncher::dispatch_scatter(PipelineData& pipeline_data,
+                                      VkBuffer in_buf, VkDeviceSize in_off, VkDeviceSize in_range,
+                                      VkBuffer out_buf, VkDeviceSize out_off, VkDeviceSize out_range,
+                                      VkBuffer pos_buf, VkDeviceSize pos_off, VkDeviceSize pos_range,
+                                      uint32_t count, uint32_t groups) {
+    VkDescriptorSetAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = descriptor_pool_;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &pipeline_data.descriptor_set_layout;
+    VkDescriptorSet descriptor_set;
+    if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
+        std::cerr << "[scatter] Failed to allocate descriptor set" << std::endl;
+        return false;
+    }
+
+    VkDescriptorBufferInfo in_info{in_buf, in_off, in_range};
+    VkDescriptorBufferInfo out_info{out_buf, out_off, out_range};
+    VkDescriptorBufferInfo pos_info{pos_buf, pos_off, pos_range};
+
+    // Dummy uniform for binding 2 (unused by the scatter kernel but in the layout).
+    VkBuffer dummy_buf = VK_NULL_HANDLE;
+    VkDeviceMemory dummy_mem = VK_NULL_HANDLE;
+    VkBufferCreateInfo ubi{};
+    ubi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    ubi.size = 64;
+    ubi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    ubi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(backend_->device(), &ubi, nullptr, &dummy_buf);
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(backend_->device(), dummy_buf, &mr);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = memory_manager_->find_memory_type(
+        mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(backend_->device(), &mai, nullptr, &dummy_mem);
+    vkBindBufferMemory(backend_->device(), dummy_buf, dummy_mem, 0);
+    VkDescriptorBufferInfo dummy_info{dummy_buf, 0, VK_WHOLE_SIZE};
+    transient_buffers_.emplace_back(dummy_buf, dummy_mem);
+
+    VkWriteDescriptorSet writes[4]{};
+    auto storage_write = [&](int idx, uint32_t binding, VkDescriptorBufferInfo* bi) {
+        writes[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[idx].dstSet = descriptor_set;
+        writes[idx].dstBinding = binding;
+        writes[idx].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[idx].descriptorCount = 1;
+        writes[idx].pBufferInfo = bi;
+    };
+    storage_write(0, 0, &in_info);
+    storage_write(1, 1, &out_info);
+    storage_write(2, 3, &pos_info);
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = descriptor_set;
+    writes[3].dstBinding = 2;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[3].descriptorCount = 1;
+    writes[3].pBufferInfo = &dummy_info;
+    vkUpdateDescriptorSets(backend_->device(), 4, writes, 0, nullptr);
+
+    sync();
+    vkResetFences(backend_->device(), 1, &fence_);
+    vkResetCommandBuffer(command_buffer_, 0);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(command_buffer_, &begin_info);
+    vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
+    vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
+    PushBlock push = make_push_block(count);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(push), &push);
+    vkCmdDispatch(command_buffer_, groups, 1, 1);
+    vkEndCommandBuffer(command_buffer_);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer_;
+    if (vkQueueSubmit(backend_->compute_queue(), 1, &submit_info, fence_) != VK_SUCCESS) {
+        std::cerr << "[scatter] Failed to submit command buffer" << std::endl;
+        return false;
+    }
+    fence_signaled_ = false;
+    sync();
+    return true;
+}
+
+bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::string& scan_kernel,
+                                    const std::string& add_kernel, const std::string& scatter_kernel,
+                                    void* input, void* output, size_t count, size_t elem_size,
+                                    size_t* out_kept) {
+    auto fit = pipelines_.find(flags_kernel);
+    auto scit = pipelines_.find(scatter_kernel);
+    if (fit == pipelines_.end() || scit == pipelines_.end()) {
+        std::cerr << "[compact] kernel not found" << std::endl;
+        return false;
+    }
+    if (out_kept) *out_kept = 0;
+    if (count == 0) return true;
+
+    UnifiedArena* arena = get_global_arena();
+    if (!arena || !arena->valid()) { std::cerr << "[compact] requires arena" << std::endl; return false; }
+    if (!arena->contains(input) || !arena->contains(output)) {
+        std::cerr << "[compact] input/output must be arena-backed (MVP)" << std::endl;
+        return false;
+    }
+
+    const VkDeviceSize range = count * elem_size;
+    VkBuffer in_buf = arena->buffer();   VkDeviceSize in_off = arena->offset_of(input);
+    VkBuffer out_buf = arena->buffer();  VkDeviceSize out_off = arena->offset_of(output);
+
+    // positions scratch (also receives the flags, scanned in place into positions).
+    void* positions = arena->allocate(count * elem_size, 256);
+    if (!positions) { std::cerr << "[compact] scratch alloc failed" << std::endl; return false; }
+    VkBuffer pos_buf = arena->buffer();
+    VkDeviceSize pos_off = arena->offset_of(positions);
+
+    const uint32_t groups = static_cast<uint32_t>((count + 255) / 256);
+
+    // 1. flags: input -> positions (1.0 if kept, else 0.0).
+    if (!dispatch_reduce_level(fit->second, in_buf, in_off, range, pos_buf, pos_off, range,
+                               static_cast<uint32_t>(count), groups)) {
+        arena->deallocate(positions); return false;
+    }
+
+    // 2. inclusive scan of the flags, in place -> positions[i] = #kept in [0..i].
+    if (!launch_scan(scan_kernel, add_kernel, positions, count, elem_size)) {
+        arena->deallocate(positions); return false;
+    }
+
+    // 3. kept count = the last inclusive-scan value (arena is host-mapped).
+    size_t kept = static_cast<size_t>(static_cast<float*>(positions)[count - 1]);
+    if (out_kept) *out_kept = kept;
+
+    // 4. scatter the kept elements into the compacted output.
+    if (!dispatch_scatter(scit->second, in_buf, in_off, range, out_buf, out_off, range,
+                          pos_buf, pos_off, range, static_cast<uint32_t>(count), groups)) {
+        arena->deallocate(positions); return false;
+    }
+
+    arena->deallocate(positions);
     return true;
 }
 

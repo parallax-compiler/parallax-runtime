@@ -70,6 +70,15 @@ public:
     bool launch_sort(const std::string& kernel_name, void* data, size_t count,
                      size_t elem_size);
 
+    // Stream compaction / copy_if (Phase 5). flags_kernel writes 1/0 per element
+    // (predicate), scan_kernel+add_kernel turn that into output positions, and
+    // scatter_kernel writes each kept element to output[pos-1]. Returns the number
+    // of kept elements via out_kept. input/output/scratch are arena-backed.
+    bool launch_compact(const std::string& flags_kernel, const std::string& scan_kernel,
+                        const std::string& add_kernel, const std::string& scatter_kernel,
+                        void* input, void* output, size_t count, size_t elem_size,
+                        size_t* out_kept);
+
     // Synchronize all pending operations
     void sync();
 
@@ -88,6 +97,15 @@ private:
     bool dispatch_sort_stage(PipelineData& pipeline_data,
                              VkBuffer data_buf, VkDeviceSize data_off, VkDeviceSize data_range,
                              uint32_t count, uint32_t k, uint32_t j, uint32_t groups);
+
+    // Compaction scatter: bind input@0, output@1, positions@3 (+ dummy uniform@2),
+    // push { count }, dispatch `groups` workgroups. Writes each kept element to its
+    // compacted slot. Needs the 3-storage descriptor layout (binding 3).
+    bool dispatch_scatter(PipelineData& pipeline_data,
+                          VkBuffer in_buf, VkDeviceSize in_off, VkDeviceSize in_range,
+                          VkBuffer out_buf, VkDeviceSize out_off, VkDeviceSize out_range,
+                          VkBuffer pos_buf, VkDeviceSize pos_off, VkDeviceSize pos_range,
+                          uint32_t count, uint32_t groups);
 
     VulkanBackend* backend_;
     MemoryManager* memory_manager_;

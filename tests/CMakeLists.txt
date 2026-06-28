@@ -84,6 +84,25 @@ if(GLSLANG)
     target_compile_definitions(test_sort PRIVATE BITONIC_SPV="${BITONIC_SPV}")
     target_link_libraries(test_sort PRIVATE parallax-runtime)
     add_test(NAME ParallelSort COMMAND test_sort)
+
+    # Phase 5: stream compaction (copy_if = flags + scan + scatter).
+    set(FLAGS_SPV ${CMAKE_CURRENT_BINARY_DIR}/flags.spv)
+    set(SCATTER_SPV ${CMAKE_CURRENT_BINARY_DIR}/scatter.spv)
+    add_custom_command(OUTPUT ${FLAGS_SPV}
+        COMMAND ${GLSLANG} -V --target-env vulkan1.2 ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/flags.comp -o ${FLAGS_SPV}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/flags.comp COMMENT "Compiling flags.comp")
+    add_custom_command(OUTPUT ${SCATTER_SPV}
+        COMMAND ${GLSLANG} -V --target-env vulkan1.2 ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/scatter.comp -o ${SCATTER_SPV}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/scatter.comp COMMENT "Compiling scatter.comp")
+    add_custom_target(compact_spv DEPENDS ${FLAGS_SPV} ${SCATTER_SPV} ${SCAN_SPV} ${SCAN_ADD_SPV})
+
+    add_executable(test_copy_if unit/test_copy_if.cpp)
+    add_dependencies(test_copy_if compact_spv)
+    target_compile_definitions(test_copy_if PRIVATE
+        FLAGS_SPV="${FLAGS_SPV}" SCATTER_SPV="${SCATTER_SPV}"
+        SCAN_SPV="${SCAN_SPV}" SCAN_ADD_SPV="${SCAN_ADD_SPV}")
+    target_link_libraries(test_copy_if PRIVATE parallax-runtime)
+    add_test(NAME ParallelCopyIf COMMAND test_copy_if)
 else()
     message(STATUS "glslangValidator not found; skipping PhysPtrRelocation/ParallelReduce tests")
 endif()

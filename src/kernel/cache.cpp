@@ -255,6 +255,27 @@ void parallax_sort(parallax_kernel_t kernel, void* data, size_t count, size_t el
     }
 }
 
+size_t parallax_copy_if(parallax_kernel_t flags_kernel, parallax_kernel_t scan_kernel,
+                        parallax_kernel_t add_kernel, parallax_kernel_t scatter_kernel,
+                        void* input, void* output, size_t count, size_t elem_size) {
+    if (!flags_kernel || !scan_kernel || !add_kernel || !scatter_kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_copy_if] invalid kernels or launcher" << std::endl;
+        return 0;
+    }
+    auto* fh = reinterpret_cast<KernelHandle*>(flags_kernel);
+    auto* sh = reinterpret_cast<KernelHandle*>(scan_kernel);
+    auto* ah = reinterpret_cast<KernelHandle*>(add_kernel);
+    auto* xh = reinterpret_cast<KernelHandle*>(scatter_kernel);
+    std::cout << "[parallax_copy_if] count=" << count << " elem_size=" << elem_size << std::endl;
+    size_t kept = 0;
+    if (!g_kernel_launcher->launch_compact(fh->name, sh->name, ah->name, xh->name,
+                                           input, output, count, elem_size, &kept)) {
+        std::cerr << "[parallax_copy_if] compaction failed" << std::endl;
+        return 0;
+    }
+    return kept;
+}
+
 bool parallax_register_buffer(void* ptr, size_t size) {
     auto* memory_manager = parallax::get_global_memory_manager();
     if (!memory_manager) {
