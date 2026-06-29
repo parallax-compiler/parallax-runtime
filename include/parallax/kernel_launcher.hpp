@@ -78,6 +78,8 @@ public:
                         const std::string& add_kernel, const std::string& scatter_kernel,
                         void* input, void* output, size_t count, size_t elem_size,
                         bool elem_is_float, size_t* out_kept);
+    // Partition reuses launch_compact: passing the partition scatter kernel (which
+    // reads num_true and writes every element) turns compaction into a partition.
 
     // Synchronize all pending operations
     void sync();
@@ -105,7 +107,7 @@ private:
                           VkBuffer in_buf, VkDeviceSize in_off, VkDeviceSize in_range,
                           VkBuffer out_buf, VkDeviceSize out_off, VkDeviceSize out_range,
                           VkBuffer pos_buf, VkDeviceSize pos_off, VkDeviceSize pos_range,
-                          uint32_t count, uint32_t groups);
+                          uint32_t count, uint32_t groups, uint32_t num_true = 0);
 
     VulkanBackend* backend_;
     MemoryManager* memory_manager_;

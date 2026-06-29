@@ -1200,7 +1200,7 @@ bool KernelLauncher::dispatch_scatter(PipelineData& pipeline_data,
                                       VkBuffer in_buf, VkDeviceSize in_off, VkDeviceSize in_range,
                                       VkBuffer out_buf, VkDeviceSize out_off, VkDeviceSize out_range,
                                       VkBuffer pos_buf, VkDeviceSize pos_off, VkDeviceSize pos_range,
-                                      uint32_t count, uint32_t groups) {
+                                      uint32_t count, uint32_t groups, uint32_t num_true) {
     VkDescriptorSetAllocateInfo alloc_info{};
     alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloc_info.descriptorPool = descriptor_pool_;
@@ -1268,9 +1268,11 @@ bool KernelLauncher::dispatch_scatter(PipelineData& pipeline_data,
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
                             pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
-    PushBlock push = make_push_block(count);
+    // Push { count, num_true }: copy_if's scatter reads only count; the partition
+    // scatter also reads num_true (the size of the kept block).
+    uint32_t push[2] = {count, num_true};
     vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(push), &push);
+                       0, sizeof(push), push);
     vkCmdDispatch(command_buffer_, groups, 1, 1);
     vkEndCommandBuffer(command_buffer_);
 
@@ -1356,9 +1358,11 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
                       : static_cast<size_t>(static_cast<int32_t*>(positions)[count - 1]);
     if (out_kept) *out_kept = kept;
 
-    // 4. scatter the kept elements into the compacted output.
+    // 4. scatter into the output. num_true (= kept) is read only by the partition
+    // scatter (which writes every element); copy_if's scatter ignores it.
     if (!dispatch_scatter(scit->second, in_buf, in_off, in_range, out_buf, out_off, out_range,
-                          pos_buf, pos_off, range, static_cast<uint32_t>(count), groups)) {
+                          pos_buf, pos_off, range, static_cast<uint32_t>(count), groups,
+                          static_cast<uint32_t>(kept))) {
         arena->deallocate(positions); return false;
     }
 
