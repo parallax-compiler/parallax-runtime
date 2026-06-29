@@ -55,7 +55,8 @@ void parallax_sort(parallax_kernel_t kernel, void* data, size_t count, size_t el
  * of elements written to `output`. */
 size_t parallax_copy_if(parallax_kernel_t flags_kernel, parallax_kernel_t scan_kernel,
                         parallax_kernel_t add_kernel, parallax_kernel_t scatter_kernel,
-                        void* input, void* output, size_t count, size_t elem_size);
+                        void* input, void* output, size_t count, size_t elem_size,
+                        int elem_is_float);
 
 /* NEW V2: Kernel execution with captured parameters */
 void parallax_kernel_launch_with_captures(

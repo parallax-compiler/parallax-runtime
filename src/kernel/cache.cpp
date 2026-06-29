@@ -257,7 +257,8 @@ void parallax_sort(parallax_kernel_t kernel, void* data, size_t count, size_t el
 
 size_t parallax_copy_if(parallax_kernel_t flags_kernel, parallax_kernel_t scan_kernel,
                         parallax_kernel_t add_kernel, parallax_kernel_t scatter_kernel,
-                        void* input, void* output, size_t count, size_t elem_size) {
+                        void* input, void* output, size_t count, size_t elem_size,
+                        int elem_is_float) {
     if (!flags_kernel || !scan_kernel || !add_kernel || !scatter_kernel || !g_kernel_launcher) {
         std::cerr << "[parallax_copy_if] invalid kernels or launcher" << std::endl;
         return 0;
@@ -269,7 +270,8 @@ size_t parallax_copy_if(parallax_kernel_t flags_kernel, parallax_kernel_t scan_k
     std::cout << "[parallax_copy_if] count=" << count << " elem_size=" << elem_size << std::endl;
     size_t kept = 0;
     if (!g_kernel_launcher->launch_compact(fh->name, sh->name, ah->name, xh->name,
-                                           input, output, count, elem_size, &kept)) {
+                                           input, output, count, elem_size,
+                                           elem_is_float != 0, &kept)) {
         std::cerr << "[parallax_copy_if] compaction failed" << std::endl;
         return 0;
     }

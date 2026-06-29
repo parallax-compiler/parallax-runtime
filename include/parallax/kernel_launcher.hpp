@@ -77,7 +77,7 @@ public:
     bool launch_compact(const std::string& flags_kernel, const std::string& scan_kernel,
                         const std::string& add_kernel, const std::string& scatter_kernel,
                         void* input, void* output, size_t count, size_t elem_size,
-                        size_t* out_kept);
+                        bool elem_is_float, size_t* out_kept);
 
     // Synchronize all pending operations
     void sync();

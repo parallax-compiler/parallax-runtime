@@ -1290,7 +1290,7 @@ bool KernelLauncher::dispatch_scatter(PipelineData& pipeline_data,
 bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::string& scan_kernel,
                                     const std::string& add_kernel, const std::string& scatter_kernel,
                                     void* input, void* output, size_t count, size_t elem_size,
-                                    size_t* out_kept) {
+                                    bool elem_is_float, size_t* out_kept) {
     auto fit = pipelines_.find(flags_kernel);
     auto scit = pipelines_.find(scatter_kernel);
     if (fit == pipelines_.end() || scit == pipelines_.end()) {
@@ -1349,8 +1349,11 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
         arena->deallocate(positions); return false;
     }
 
-    // 3. kept count = the last inclusive-scan value (arena is host-mapped).
-    size_t kept = static_cast<size_t>(static_cast<float*>(positions)[count - 1]);
+    // 3. kept count = the last inclusive-scan value (arena is host-mapped). The
+    // positions buffer holds the element type, so read float or int32 accordingly.
+    size_t kept = elem_is_float
+                      ? static_cast<size_t>(static_cast<float*>(positions)[count - 1])
+                      : static_cast<size_t>(static_cast<int32_t*>(positions)[count - 1]);
     if (out_kept) *out_kept = kept;
 
     // 4. scatter the kept elements into the compacted output.

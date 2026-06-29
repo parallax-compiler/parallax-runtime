@@ -60,7 +60,7 @@ int main() {
         output[i] = -1.0f;
     }
 
-    size_t kept = parallax_copy_if(flags_k, scan_k, add_k, scat_k, input, output, N, sizeof(float));
+    size_t kept = parallax_copy_if(flags_k, scan_k, add_k, scat_k, input, output, N, sizeof(float), 1);
 
     int rc = 0;
     if (kept != N / 2) { std::fprintf(stderr, "FAIL: kept=%zu expected %u\n", kept, N / 2); rc = 1; }
