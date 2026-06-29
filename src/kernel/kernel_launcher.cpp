@@ -1302,14 +1302,33 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
 
     UnifiedArena* arena = get_global_arena();
     if (!arena || !arena->valid()) { std::cerr << "[compact] requires arena" << std::endl; return false; }
-    if (!arena->contains(input) || !arena->contains(output)) {
-        std::cerr << "[compact] input/output must be arena-backed (MVP)" << std::endl;
-        return false;
-    }
 
+    // Resolve input/output: arena zero-copy when possible, else register the external
+    // buffer (upload the input; download the output afterwards). The arena often only
+    // initializes at the first launch, so allocator-backed vectors built earlier take
+    // this register path — same as launch_scan/sort/reduce. positions is arena scratch.
     const VkDeviceSize range = count * elem_size;
-    VkBuffer in_buf = arena->buffer();   VkDeviceSize in_off = arena->offset_of(input);
-    VkBuffer out_buf = arena->buffer();  VkDeviceSize out_off = arena->offset_of(output);
+    const bool in_arena = arena->contains(input);
+    const bool out_arena = arena->contains(output);
+    VkBuffer in_buf, out_buf; VkDeviceSize in_off, out_off;
+    VkDeviceSize in_range = range, out_range = range;
+    if (in_arena) {
+        in_buf = arena->buffer(); in_off = arena->offset_of(input);
+    } else {
+        VkBuffer reg = memory_manager_->get_buffer(input);
+        if (reg == VK_NULL_HANDLE) { memory_manager_->register_external_buffer(input, range); reg = memory_manager_->get_buffer(input); }
+        if (reg == VK_NULL_HANDLE) { std::cerr << "[compact] bad input buffer" << std::endl; return false; }
+        memory_manager_->sync_before_kernel(input);
+        in_buf = reg; in_off = 0; in_range = VK_WHOLE_SIZE;
+    }
+    if (out_arena) {
+        out_buf = arena->buffer(); out_off = arena->offset_of(output);
+    } else {
+        VkBuffer reg = memory_manager_->get_buffer(output);
+        if (reg == VK_NULL_HANDLE) { memory_manager_->register_external_buffer(output, range); reg = memory_manager_->get_buffer(output); }
+        if (reg == VK_NULL_HANDLE) { std::cerr << "[compact] bad output buffer" << std::endl; return false; }
+        out_buf = reg; out_off = 0; out_range = VK_WHOLE_SIZE;
+    }
 
     // positions scratch (also receives the flags, scanned in place into positions).
     void* positions = arena->allocate(count * elem_size, 256);
@@ -1320,7 +1339,7 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
     const uint32_t groups = static_cast<uint32_t>((count + 255) / 256);
 
     // 1. flags: input -> positions (1.0 if kept, else 0.0).
-    if (!dispatch_reduce_level(fit->second, in_buf, in_off, range, pos_buf, pos_off, range,
+    if (!dispatch_reduce_level(fit->second, in_buf, in_off, in_range, pos_buf, pos_off, range,
                                static_cast<uint32_t>(count), groups)) {
         arena->deallocate(positions); return false;
     }
@@ -1335,11 +1354,12 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
     if (out_kept) *out_kept = kept;
 
     // 4. scatter the kept elements into the compacted output.
-    if (!dispatch_scatter(scit->second, in_buf, in_off, range, out_buf, out_off, range,
+    if (!dispatch_scatter(scit->second, in_buf, in_off, in_range, out_buf, out_off, out_range,
                           pos_buf, pos_off, range, static_cast<uint32_t>(count), groups)) {
         arena->deallocate(positions); return false;
     }
 
+    if (!out_arena) memory_manager_->sync_after_kernel(output);  // download compacted result
     arena->deallocate(positions);
     return true;
 }
