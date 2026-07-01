@@ -51,6 +51,17 @@ public:
     bool         contains(const void* ptr) const;
     VkDeviceSize offset_of(const void* ptr) const;  // precondition: contains(ptr)
 
+    // Software unified memory across a discrete (non-host-visible) device.
+    // On an integrated/UMA device the arena buffer is itself host-visible, so the
+    // host pointer aliases device memory and these are no-ops (uma() == true). On a
+    // discrete GPU the host writes into a host-visible STAGING buffer and the kernels
+    // run against a separate DEVICE_LOCAL buffer; flush copies host->device before a
+    // launch and invalidate copies device->host after it. (Whole used-range copies
+    // for now; dirty-range tracking is the next optimization.)
+    void flush_to_device();       // host staging -> device (before kernels read)
+    void invalidate_from_device(); // device -> host staging (after kernels write)
+    bool uma() const { return uma_; }
+
     // Accessors.
     void*                     host_base() const { return host_base_; }
     VkBuffer                  buffer() const { return buffer_; }
@@ -69,12 +80,22 @@ private:
     };
 
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props) const;
+    void     copy_range(VkBuffer src, VkBuffer dst, VkDeviceSize size);  // staging xfer
 
     VulkanBackend*  backend_ = nullptr;
-    VkBuffer        buffer_ = VK_NULL_HANDLE;
+    VkBuffer        buffer_ = VK_NULL_HANDLE;        // DEVICE buffer kernels bind to
     VkDeviceMemory  memory_ = VK_NULL_HANDLE;
-    void*           host_base_ = nullptr;
+    void*           host_base_ = nullptr;            // host pointer (device map or staging)
     VkDeviceAddress device_address_ = 0;
+
+    // Discrete-GPU staging (only allocated when the device buffer is NOT host-visible,
+    // or when PARALLAX_FORCE_STAGING forces this path to exercise it on UMA hardware).
+    bool            uma_ = true;                     // device memory is host-visible
+    VkBuffer        staging_buffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory  staging_memory_ = VK_NULL_HANDLE;
+    VkCommandPool   xfer_pool_ = VK_NULL_HANDLE;
+    VkCommandBuffer xfer_cmd_ = VK_NULL_HANDLE;
+    VkFence         xfer_fence_ = VK_NULL_HANDLE;
     VkDeviceSize    capacity_ = 0;
     VkDeviceSize    bump_ = 0;        // next never-used offset
     VkDeviceSize    high_water_ = 0;  // bytes ever handed out (bump_ minus reuse)

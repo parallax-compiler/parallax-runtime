@@ -30,6 +30,25 @@ PushBlock make_push_block(size_t count) {
     }
     return pc;
 }
+
+// RAII migration boundary for a top-level launch operation: migrate host writes to
+// the device buffer before, and device results back to the host after. A reentrancy
+// depth counter makes only the OUTERMOST operation migrate, so a primitive that calls
+// another (launch_compact -> launch_scan) keeps all intermediate data on the device
+// instead of clobbering it with stale host data. No-op on UMA (arena->uma()).
+int g_arena_sync_depth = 0;
+struct ArenaSyncScope {
+    UnifiedArena* arena = nullptr;
+    ArenaSyncScope() {
+        if (g_arena_sync_depth++ == 0) {
+            arena = get_global_arena();
+            if (arena) arena->flush_to_device();
+        }
+    }
+    ~ArenaSyncScope() {
+        if (--g_arena_sync_depth == 0 && arena) arena->invalidate_from_device();
+    }
+};
 }  // namespace
 
 KernelLauncher::KernelLauncher(VulkanBackend* backend, MemoryManager* memory_manager)
@@ -256,6 +275,7 @@ bool KernelLauncher::load_kernel(const std::string& name, const uint32_t* spirv_
 }
 
 bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t count, float multiplier, size_t elem_size) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
@@ -428,6 +448,7 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
 }
 
 bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count, size_t elem_size, size_t out_elem_size) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
@@ -597,6 +618,7 @@ bool KernelLauncher::launch_with_captures(
     void* captures,
     size_t capture_size,
     size_t elem_size) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
 
     (void)elem_size;  // data buffer is expected to be pre-registered on this path
     auto it = pipelines_.find(kernel_name);
@@ -927,6 +949,7 @@ bool KernelLauncher::dispatch_reduce_level(PipelineData& pipeline_data,
 
 bool KernelLauncher::launch_reduce(const std::string& kernel_name, void* data, size_t count,
                                    size_t elem_size, void* out_result) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
@@ -993,7 +1016,10 @@ bool KernelLauncher::launch_reduce(const std::string& kernel_name, void* data, s
         toggle ^= 1;
     }
 
-    // src now holds the single reduced element in host-coherent arena memory.
+    // src now holds the single reduced element in arena memory. On a discrete GPU the
+    // result is in the device buffer, so migrate it to the host mapping before reading
+    // (no-op on UMA; the RAII scope also invalidates at exit for the caller's data).
+    if (arena) arena->invalidate_from_device();
     std::memcpy(out_result, src, elem_size);
     arena->deallocate(scratch[0]);
     arena->deallocate(scratch[1]);
@@ -1002,6 +1028,7 @@ bool KernelLauncher::launch_reduce(const std::string& kernel_name, void* data, s
 
 bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::string& add_kernel,
                                  void* data, size_t count, size_t elem_size) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
     auto sit = pipelines_.find(scan_kernel);
     auto ait = pipelines_.find(add_kernel);
     if (sit == pipelines_.end() || ait == pipelines_.end()) {
@@ -1159,6 +1186,7 @@ bool KernelLauncher::dispatch_sort_stage(PipelineData& pipeline_data,
 
 bool KernelLauncher::launch_sort(const std::string& kernel_name, void* data, size_t count,
                                  size_t elem_size) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) { std::cerr << "[sort] kernel not found" << std::endl; return false; }
     if (count <= 1) return true;  // already sorted
@@ -1293,6 +1321,7 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
                                     const std::string& add_kernel, const std::string& scatter_kernel,
                                     void* input, void* output, size_t count, size_t elem_size,
                                     bool elem_is_float, size_t* out_kept) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
     auto fit = pipelines_.find(flags_kernel);
     auto scit = pipelines_.find(scatter_kernel);
     if (fit == pipelines_.end() || scit == pipelines_.end()) {
@@ -1351,8 +1380,11 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
         arena->deallocate(positions); return false;
     }
 
-    // 3. kept count = the last inclusive-scan value (arena is host-mapped). The
-    // positions buffer holds the element type, so read float or int32 accordingly.
+    // 3. kept count = the last inclusive-scan value. On a discrete GPU the scan wrote
+    // the device buffer, so migrate positions back to the host mapping before reading
+    // (no-op on UMA). launch_scan's own scope did not invalidate — it was nested.
+    if (arena) arena->invalidate_from_device();
+    // The positions buffer holds the element type, so read float or int32 accordingly.
     size_t kept = elem_is_float
                       ? static_cast<size_t>(static_cast<float*>(positions)[count - 1])
                       : static_cast<size_t>(static_cast<int32_t*>(positions)[count - 1]);

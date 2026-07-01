@@ -55,6 +55,14 @@ if(GLSLANG)
     target_link_libraries(test_reduce PRIVATE parallax-runtime)
     add_test(NAME ParallelReduce COMMAND test_reduce)
 
+    # Discrete-GPU memory model: force the device-local + staging migration path and
+    # verify a reduction is still exact through it (reuses the reduce kernel).
+    add_executable(test_staging unit/test_staging.cpp)
+    add_dependencies(test_staging reduce_spv)
+    target_compile_definitions(test_staging PRIVATE REDUCE_SPV="${REDUCE_SPV}")
+    target_link_libraries(test_staging PRIVATE parallax-runtime)
+    add_test(NAME StagingMigration COMMAND test_staging)
+
     # Phase 5: inclusive prefix scan (per-block scan + add block offsets).
     set(SCAN_SPV ${CMAKE_CURRENT_BINARY_DIR}/scan.spv)
     set(SCAN_ADD_SPV ${CMAKE_CURRENT_BINARY_DIR}/scan_add.spv)
