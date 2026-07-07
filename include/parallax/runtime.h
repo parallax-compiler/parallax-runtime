@@ -58,6 +58,15 @@ size_t parallax_copy_if(parallax_kernel_t flags_kernel, parallax_kernel_t scan_k
                         void* input, void* output, size_t count, size_t elem_size,
                         int elem_is_float);
 
+/* Layer A funnel registry. The compiler plugin emits one registrar per
+ * parallax::detail::device_invoke<T,F> instantiation, keyed by that
+ * instantiation's __PRETTY_FUNCTION__; the funnel body looks the kernel up at
+ * first call (host-loop fallback on a miss). Registration only records the
+ * pointer; the SPIR-V is loaded lazily on first lookup (after runtime init), so
+ * registrars may run at static-init time before the backend exists. */
+void parallax_kernel_register(const char* key, const unsigned int* spirv, size_t words);
+parallax_kernel_t parallax_kernel_lookup(const char* key);
+
 /* NEW V2: Kernel execution with captured parameters */
 void parallax_kernel_launch_with_captures(
     parallax_kernel_t kernel,

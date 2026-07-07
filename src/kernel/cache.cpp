@@ -4,8 +4,10 @@
 #include <memory>
 #include <string>
 #include <cstdarg>
+#include <cstdlib>
 #include <iostream>
 #include <atomic>
+#include <unordered_map>
 
 namespace {
     // Global kernel launcher instance
@@ -59,6 +61,46 @@ parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words) 
     auto* handle = new KernelHandle{kernel_name};
     std::cout << "[parallax_kernel_load] Successfully loaded kernel: " << kernel_name << std::endl;
     return reinterpret_cast<parallax_kernel_t>(handle);
+}
+
+namespace {
+    // Layer A funnel registry. Keyed by the device_invoke instantiation's
+    // __PRETTY_FUNCTION__ (the plugin emits the identical string). Registrars run
+    // at static-init time, possibly before the backend exists, so we only record
+    // the SPIR-V pointer here and load lazily on the first lookup.
+    struct FunnelEntry {
+        const unsigned int* spirv;
+        size_t words;
+        parallax_kernel_t handle;
+        bool loaded;
+    };
+    std::unordered_map<std::string, FunnelEntry>& funnel_registry() {
+        static std::unordered_map<std::string, FunnelEntry> reg;
+        return reg;
+    }
+}
+
+void parallax_kernel_register(const char* key, const unsigned int* spirv, size_t words) {
+    if (!key) return;
+    funnel_registry()[key] = FunnelEntry{spirv, words, nullptr, false};
+    if (std::getenv("PARALLAX_DEBUG"))
+        std::cerr << "[parallax_kernel_register] " << key << " (" << words << " words)\n";
+}
+
+parallax_kernel_t parallax_kernel_lookup(const char* key) {
+    if (!key) return nullptr;
+    auto& reg = funnel_registry();
+    auto it = reg.find(key);
+    if (it == reg.end()) {
+        if (std::getenv("PARALLAX_DEBUG"))
+            std::cerr << "[parallax_kernel_lookup] MISS: " << key << "\n";
+        return nullptr;
+    }
+    if (!it->second.loaded) {
+        it->second.handle = parallax_kernel_load(it->second.spirv, it->second.words);
+        it->second.loaded = true;
+    }
+    return it->second.handle;
 }
 
 void parallax_kernel_launch(parallax_kernel_t kernel, ...) {
