@@ -21,6 +21,7 @@
 #include <iterator>
 #include <type_traits>
 #include <algorithm>
+#include <numeric>
 #include <execution>
 #include <parallax/runtime.h>
 
@@ -89,6 +90,28 @@ __attribute__((noinline)) void device_transform(const Tin* in, Tout* out, std::s
     for (std::size_t i = 0; i < n; ++i) out[i] = f(in[i]);
 }
 
+// Fold funnel (value-returning): reduce with the default '+' op. The plugin generates
+// the fixed workgroup tree-reduction kernel for T (no per-element functor). The runtime
+// returns the pure GPU sum; we combine the caller's init on the host (matches the old
+// std::reduce path). MVP: default '+' only (custom-op reduce stays on the host).
+template <class T>
+__attribute__((noinline)) T device_reduce(const T* data, std::size_t n, T init) {
+    static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
+    if (k) {
+        void* ab = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        if (ab) {
+            std::memcpy(ab, data, n * sizeof(T));
+            T gpu{};
+            parallax_reduce(k, ab, n, sizeof(T), &gpu);
+            parallax_arena_free(ab);
+            return init + gpu;
+        }
+    }
+    T acc = init;
+    for (std::size_t i = 0; i < n; ++i) acc = acc + data[i];
+    return acc;
+}
+
 } // namespace detail
 
 namespace detail {
@@ -133,6 +156,23 @@ OutIt transform(Policy&&, InIt first, InIt last, OutIt d_first, F f) {
         return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
     }
     return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
+}
+
+template <class Policy, class It, class T>
+T reduce(Policy&&, It first, It last, T init) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        if (n == 0) return init;
+        // Reduce in the ELEMENT type on the GPU (identity 0), then host-combine the
+        // init. Keeps the kernel monomorphic in the element type even when the init type
+        // T differs (e.g. float elements, double init) — approximate vs std::reduce's
+        // per-step accumulation, exact when T == element type (the common case).
+        using E = typename std::iterator_traits<It>::value_type;
+        E gpu = detail::device_reduce<E>(&*first, n, E{});
+        return init + static_cast<T>(gpu);
+    } else {
+        return std::reduce(first, last, init);  // 3-arg form is not routed -> no recursion
+    }
 }
 
 } // namespace parallax
