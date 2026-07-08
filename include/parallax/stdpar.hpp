@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <string>
 #include <iterator>
 #include <type_traits>
 #include <algorithm>
@@ -137,6 +138,30 @@ __attribute__((noinline)) void device_sort(T* data, std::size_t n) {
     std::sort(data, data + n);
 }
 
+// Inclusive-scan funnel (default '+'). The plugin generates TWO fixed kernels for T
+// (per-block Hillis-Steele scan + add-block-offsets), registered under this
+// instantiation's __PRETTY_FUNCTION__ with ":scan"/":add" suffixes (both sides append
+// the same suffix). Stage in->arena, scan in place, copy out.
+template <class T>
+__attribute__((noinline)) void device_scan(const T* in, T* out, std::size_t n) {
+    static parallax_kernel_t ks =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scan").c_str());
+    static parallax_kernel_t ka =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":add").c_str());
+    if (ks && ka) {
+        void* ab = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        if (ab) {
+            std::memcpy(ab, in, n * sizeof(T));
+            parallax_scan(ks, ka, ab, n, sizeof(T));
+            std::memcpy(out, ab, n * sizeof(T));
+            parallax_arena_free(ab);
+            return;
+        }
+    }
+    T acc{};
+    for (std::size_t i = 0; i < n; ++i) { acc = acc + in[i]; out[i] = acc; }
+}
+
 } // namespace detail
 
 namespace detail {
@@ -221,6 +246,17 @@ void sort(Policy&&, It first, It last) {
     } else {
         std::sort(first, last);  // 2-arg form is not routed -> no recursion
     }
+}
+
+template <class Policy, class It, class OutIt>
+OutIt inclusive_scan(Policy&&, It first, It last, OutIt d_first) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        if (n) detail::device_scan(&*first, &*d_first, n);
+    } else {
+        std::inclusive_scan(first, last, d_first);  // 3-arg form is not routed
+    }
+    return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
 }
 
 } // namespace parallax
