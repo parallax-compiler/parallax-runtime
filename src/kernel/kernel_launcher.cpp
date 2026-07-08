@@ -620,7 +620,6 @@ bool KernelLauncher::launch_with_captures(
     size_t elem_size) {
     ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
 
-    (void)elem_size;  // data buffer is expected to be pre-registered on this path
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
         std::cerr << "Kernel not found: " << kernel_name << std::endl;
@@ -629,15 +628,31 @@ bool KernelLauncher::launch_with_captures(
 
     auto& pipeline_data = it->second;
 
-    // Get Vulkan buffer for main data
-    VkBuffer vk_buffer = memory_manager_->get_buffer(buffer);
-    if (vk_buffer == VK_NULL_HANDLE) {
-        std::cerr << "Invalid buffer" << std::endl;
-        return false;
+    // Resolve the data buffer the SAME way launch() does: arena-backed data (e.g. the
+    // funnel's staged buffer) binds the arena VkBuffer zero-copy at its offset; a plain
+    // external pointer is auto-registered. Previously this path assumed a pre-registered
+    // buffer (get_buffer only) and returned "Invalid buffer" for arena pointers.
+    parallax::UnifiedArena* arena = parallax::get_global_arena();
+    const bool arena_backed = arena && buffer && arena->contains(buffer);
+    VkDeviceSize data_offset = 0;
+    VkDeviceSize data_range = static_cast<VkDeviceSize>(count) * elem_size;
+    VkBuffer vk_buffer = VK_NULL_HANDLE;
+    if (arena_backed) {
+        vk_buffer = arena->buffer();
+        data_offset = arena->offset_of(buffer);
+    } else {
+        vk_buffer = memory_manager_->get_buffer(buffer);
+        if (vk_buffer == VK_NULL_HANDLE && buffer != nullptr && data_range > 0) {
+            memory_manager_->register_external_buffer(buffer, data_range);
+            vk_buffer = memory_manager_->get_buffer(buffer);
+        }
+        if (vk_buffer == VK_NULL_HANDLE) {
+            std::cerr << "Invalid buffer" << std::endl;
+            return false;
+        }
+        memory_manager_->sync_before_kernel(buffer);
     }
-
-    // Sync dirty blocks before kernel
-    memory_manager_->sync_before_kernel(buffer);
+    if (data_range == 0) data_range = VK_WHOLE_SIZE;
 
     // Check descriptor cache
     CacheKey key{pipeline_data.descriptor_set_layout, buffer};
@@ -736,8 +751,9 @@ bool KernelLauncher::launch_with_captures(
         buffer_infos.reserve(3);
         writes.reserve(3);
 
-        // Binding 0: Main buffer (storage buffer)
-        buffer_infos.push_back({vk_buffer, 0, VK_WHOLE_SIZE});
+        // Binding 0: Main buffer (storage buffer). Bind at the arena offset (zero-copy)
+        // when arena-backed; offset 0 otherwise.
+        buffer_infos.push_back({vk_buffer, data_offset, data_range});
         VkWriteDescriptorSet write0{};
         write0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write0.dstSet = descriptor_set;
