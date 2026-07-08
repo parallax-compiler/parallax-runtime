@@ -20,6 +20,8 @@
 #include <cstring>
 #include <iterator>
 #include <type_traits>
+#include <algorithm>
+#include <execution>
 #include <parallax/runtime.h>
 
 namespace parallax {
@@ -67,13 +69,36 @@ __attribute__((noinline)) void device_invoke(T* data, std::size_t n, F f) {
 
 } // namespace detail
 
+namespace detail {
+
+// Only parallel policies offload; sequenced/unsequenced stay on the CPU. Recognizes
+// both our policies and the std::execution ones (so transparently-routed
+// std::for_each(std::execution::par,...) is gated correctly).
+template <class P>
+inline constexpr bool is_offload_policy_v =
+    std::is_same_v<std::remove_cvref_t<P>, parallel_policy> ||
+    std::is_same_v<std::remove_cvref_t<P>, parallel_unsequenced_policy>
+#if defined(__cpp_lib_execution)
+    || std::is_same_v<std::remove_cvref_t<P>, std::execution::parallel_policy>
+    || std::is_same_v<std::remove_cvref_t<P>, std::execution::parallel_unsequenced_policy>
+#endif
+    ;
+
+} // namespace detail
+
 // ---- Algorithm surface (map skeleton) -------------------------------------
 
 template <class Policy, class It, class F>
-void for_each(Policy, It first, It last, F f) {
-    auto n = static_cast<std::size_t>(std::distance(first, last));
-    if (n == 0) return;
-    detail::device_invoke(&*first, n, f);
+void for_each(Policy&&, It first, It last, F f) {
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        auto n = static_cast<std::size_t>(std::distance(first, last));
+        if (n == 0) return;
+        detail::device_invoke(&*first, n, f);
+    } else {
+        // seq / unseq -> plain serial std::for_each on the CPU (3-arg form is not
+        // routed by the plugin, so no recursion).
+        std::for_each(first, last, f);
+    }
 }
 
 } // namespace parallax
