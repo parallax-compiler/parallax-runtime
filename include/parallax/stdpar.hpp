@@ -17,6 +17,7 @@
 // dispatches to the GPU, a miss runs the ISO sequential loop (correct either way).
 
 #include <cstddef>
+#include <cstring>
 #include <iterator>
 #include <type_traits>
 #include <parallax/runtime.h>
@@ -41,16 +42,24 @@ template <class T, class F>
 __attribute__((noinline)) void device_invoke(T* data, std::size_t n, F f) {
     static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
     if (k) {
-        if constexpr (std::is_empty_v<F>) {
-            // Captureless functor: no uniform bindings in the kernel.
-            parallax_kernel_launch(k, static_cast<void*>(data), n, sizeof(T));
-        } else {
-            // Capturing functor: pass the closure bytes as the capture block.
-            parallax_kernel_launch_with_captures(k, static_cast<void*>(data), n,
-                                                 static_cast<void*>(&f), sizeof(F),
-                                                 sizeof(T));
+        // Stage the data through the unified arena (host-mapped, GPU-addressable):
+        // copy in, launch zero-copy on the arena buffer, copy back. This is the
+        // software-UM path that is correct on both UMA and discrete GPUs; a later
+        // optimization can bind arena-backed containers zero-copy to skip the copies.
+        void* ab = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        if (ab) {
+            std::memcpy(ab, data, n * sizeof(T));
+            if constexpr (std::is_empty_v<F>) {
+                parallax_kernel_launch(k, ab, n, sizeof(T));
+            } else {
+                parallax_kernel_launch_with_captures(k, ab, n,
+                                                     static_cast<void*>(&f), sizeof(F),
+                                                     sizeof(T));
+            }
+            std::memcpy(data, ab, n * sizeof(T));
+            parallax_arena_free(ab);
+            return;
         }
-        return;
     }
     // Host fallback (ISO semantics) — also the path when codegen bailed.
     for (std::size_t i = 0; i < n; ++i) f(data[i]);
