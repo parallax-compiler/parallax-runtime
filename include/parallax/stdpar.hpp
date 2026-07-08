@@ -22,6 +22,7 @@
 #include <type_traits>
 #include <algorithm>
 #include <numeric>
+#include <limits>
 #include <execution>
 #include <parallax/runtime.h>
 
@@ -112,6 +113,30 @@ __attribute__((noinline)) T device_reduce(const T* data, std::size_t n, T init) 
     return acc;
 }
 
+// Sort funnel (in-place, ascending, default '<'). The plugin generates the fixed
+// bitonic compare-exchange kernel for T; the runtime dispatches it over the bitonic
+// schedule (which requires a power-of-two count, so we pad through the arena with the
+// type max — padding sorts to the end, leaving the first n as the sorted values).
+template <class T>
+__attribute__((noinline)) void device_sort(T* data, std::size_t n) {
+    static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
+    if (k) {
+        std::size_t m = 1;
+        while (m < n) m <<= 1;                 // next power of two
+        void* ab = parallax_arena_alloc(m * sizeof(T), alignof(T));
+        if (ab) {
+            T* pad = static_cast<T*>(ab);
+            std::memcpy(pad, data, n * sizeof(T));
+            for (std::size_t i = n; i < m; ++i) pad[i] = (std::numeric_limits<T>::max)();
+            parallax_sort(k, pad, m, sizeof(T));
+            std::memcpy(data, pad, n * sizeof(T));
+            parallax_arena_free(ab);
+            return;
+        }
+    }
+    std::sort(data, data + n);
+}
+
 } // namespace detail
 
 namespace detail {
@@ -172,6 +197,29 @@ T reduce(Policy&&, It first, It last, T init) {
         return init + static_cast<T>(gpu);
     } else {
         return std::reduce(first, last, init);  // 3-arg form is not routed -> no recursion
+    }
+}
+
+// fill = a map that writes a captured constant. Reuses the device_invoke funnel with a
+// value-capturing setter (captures now bind correctly), so no new kernel shape is needed.
+template <class Policy, class It, class V>
+void fill(Policy&&, It first, It last, const V& value) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        using E = typename std::iterator_traits<It>::value_type;
+        if (n) { E v = static_cast<E>(value); detail::device_invoke(&*first, n, [v](E& x){ x = v; }); }
+    } else {
+        std::fill(first, last, value);  // 3-arg form is not routed -> no recursion
+    }
+}
+
+template <class Policy, class It>
+void sort(Policy&&, It first, It last) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        if (n) detail::device_sort(&*first, n);
+    } else {
+        std::sort(first, last);  // 2-arg form is not routed -> no recursion
     }
 }
 
