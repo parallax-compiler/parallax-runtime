@@ -457,33 +457,41 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
 
     auto& pipeline_data = it->second;
 
-    // Auto-register buffers if not already registered. The output element size may
-    // differ from the input (e.g. float -> double), so size each buffer separately.
+    // Resolve in/out buffers. Arena-backed (e.g. the funnel's staged buffers) bind the
+    // arena VkBuffer zero-copy at their offset; plain pointers are auto-registered. The
+    // output element size may differ from the input (e.g. float -> double), so size each
+    // buffer separately.
     if (out_elem_size == 0) out_elem_size = elem_size;
     size_t in_size = count * elem_size;
     size_t out_size = count * out_elem_size;
-    VkBuffer vk_in = memory_manager_->get_buffer(in_buffer);
-    if (vk_in == VK_NULL_HANDLE && in_buffer != nullptr) {
-        std::cerr << "[KernelLauncher] Auto-registering input buffer" << std::endl;
-        memory_manager_->register_external_buffer(in_buffer, in_size);
+    parallax::UnifiedArena* arena = parallax::get_global_arena();
+    VkDeviceSize in_off = 0, out_off = 0;
+    VkBuffer vk_in = VK_NULL_HANDLE, vk_out = VK_NULL_HANDLE;
+    if (arena && in_buffer && arena->contains(in_buffer)) {
+        vk_in = arena->buffer(); in_off = arena->offset_of(in_buffer);
+    } else {
         vk_in = memory_manager_->get_buffer(in_buffer);
+        if (vk_in == VK_NULL_HANDLE && in_buffer != nullptr) {
+            memory_manager_->register_external_buffer(in_buffer, in_size);
+            vk_in = memory_manager_->get_buffer(in_buffer);
+        }
+        if (in_buffer) memory_manager_->sync_before_kernel(in_buffer);
     }
-
-    VkBuffer vk_out = memory_manager_->get_buffer(out_buffer);
-    if (vk_out == VK_NULL_HANDLE && out_buffer != nullptr) {
-        std::cerr << "[KernelLauncher] Auto-registering output buffer" << std::endl;
-        memory_manager_->register_external_buffer(out_buffer, out_size);
+    if (arena && out_buffer && arena->contains(out_buffer)) {
+        vk_out = arena->buffer(); out_off = arena->offset_of(out_buffer);
+    } else {
         vk_out = memory_manager_->get_buffer(out_buffer);
+        if (vk_out == VK_NULL_HANDLE && out_buffer != nullptr) {
+            memory_manager_->register_external_buffer(out_buffer, out_size);
+            vk_out = memory_manager_->get_buffer(out_buffer);
+        }
+        if (out_buffer) memory_manager_->sync_before_kernel(out_buffer);
     }
 
     if (vk_in == VK_NULL_HANDLE || vk_out == VK_NULL_HANDLE) {
         std::cerr << "Invalid buffers after auto-registration" << std::endl;
         return false;
     }
-    
-    // Sync dirty blocks before kernel
-    memory_manager_->sync_before_kernel(in_buffer);
-    memory_manager_->sync_before_kernel(out_buffer);
     
     // Check descriptor cache (multi-buffer key is complex, for MVP we use a simple combination)
     // Actually, for transform we have 2 buffers. We'll use the out_buffer as the key part for now
@@ -508,12 +516,12 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
         // Update descriptor set (2 storage buffers + 1 uniform buffer for captures)
         std::vector<VkDescriptorBufferInfo> buffer_infos(2);
         buffer_infos[0].buffer = vk_in;
-        buffer_infos[0].offset = 0;
-        buffer_infos[0].range = VK_WHOLE_SIZE;
+        buffer_infos[0].offset = in_off;
+        buffer_infos[0].range = in_size ? static_cast<VkDeviceSize>(in_size) : VK_WHOLE_SIZE;
 
         buffer_infos[1].buffer = vk_out;
-        buffer_infos[1].offset = 0;
-        buffer_infos[1].range = VK_WHOLE_SIZE;
+        buffer_infos[1].offset = out_off;
+        buffer_infos[1].range = out_size ? static_cast<VkDeviceSize>(out_size) : VK_WHOLE_SIZE;
 
         // Create dummy uniform buffer for captures
         VkBuffer dummy_uniform_buffer = VK_NULL_HANDLE;

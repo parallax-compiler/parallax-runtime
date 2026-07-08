@@ -67,6 +67,28 @@ __attribute__((noinline)) void device_invoke(T* data, std::size_t n, F f) {
     for (std::size_t i = 0; i < n; ++i) f(data[i]);
 }
 
+// Map in->out funnel: out[i] = f(in[i]). The plugin sees the functor returns non-void
+// and generates a two-buffer transform kernel automatically. MVP: captureless functor
+// (the pSTL-Bench transform kernel is a standalone lambda); a capturing transform op
+// stays on the host until a transform-with-captures runtime path exists.
+template <class Tin, class Tout, class F>
+__attribute__((noinline)) void device_transform(const Tin* in, Tout* out, std::size_t n, F f) {
+    static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
+    if (k && std::is_empty_v<F>) {
+        void* ai = parallax_arena_alloc(n * sizeof(Tin), alignof(Tin));
+        void* ao = parallax_arena_alloc(n * sizeof(Tout), alignof(Tout));
+        if (ai && ao) {
+            std::memcpy(ai, in, n * sizeof(Tin));
+            parallax_kernel_launch_transform2(k, ai, ao, n, sizeof(Tin), sizeof(Tout));
+            std::memcpy(out, ao, n * sizeof(Tout));
+            parallax_arena_free(ao);
+            parallax_arena_free(ai);
+            return;
+        }
+    }
+    for (std::size_t i = 0; i < n; ++i) out[i] = f(in[i]);
+}
+
 } // namespace detail
 
 namespace detail {
@@ -99,6 +121,18 @@ void for_each(Policy&&, It first, It last, F f) {
         // routed by the plugin, so no recursion).
         std::for_each(first, last, f);
     }
+}
+
+template <class Policy, class InIt, class OutIt, class F>
+OutIt transform(Policy&&, InIt first, InIt last, OutIt d_first, F f) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        if (n) detail::device_transform(&*first, &*d_first, n, f);
+    } else {
+        std::transform(first, last, d_first, f);  // 4-arg form is not routed -> no recursion
+        return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
+    }
+    return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
 }
 
 } // namespace parallax
