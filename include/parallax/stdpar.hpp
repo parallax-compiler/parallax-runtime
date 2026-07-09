@@ -190,6 +190,32 @@ __attribute__((noinline)) U device_transform_reduce(const T* in, std::size_t n, 
     return acc;
 }
 
+// count_if funnel: predicate-count transform (Pred -> int 1/0, ":pred") + I32 '+' reduce
+// (":reduce"). Returns the count. MVP: captureless predicate.
+template <class T, class Pred>
+__attribute__((noinline)) long device_count_if(const T* in, std::size_t n, Pred pred) {
+    static parallax_kernel_t kp =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":pred").c_str());
+    static parallax_kernel_t kr =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":reduce").c_str());
+    if (kp && kr && std::is_empty_v<Pred>) {
+        void* ai = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        void* ao = parallax_arena_alloc(n * sizeof(int), alignof(int));
+        if (ai && ao) {
+            std::memcpy(ai, in, n * sizeof(T));
+            parallax_kernel_launch_transform2(kp, ai, ao, n, sizeof(T), sizeof(int));
+            int gpu = 0;
+            parallax_reduce(kr, ao, n, sizeof(int), &gpu);
+            parallax_arena_free(ao);
+            parallax_arena_free(ai);
+            return gpu;
+        }
+    }
+    long c = 0;
+    for (std::size_t i = 0; i < n; ++i) if (pred(in[i])) ++c;
+    return c;
+}
+
 } // namespace detail
 
 namespace detail {
@@ -301,6 +327,35 @@ T transform_reduce(Policy&&, It first, It last, T init, BinOp bop, UnOp uop) {
     } else {
         return std::transform_reduce(first, last, init, bop, uop);  // 5-arg-ish not routed
     }
+}
+
+template <class Policy, class It, class Pred>
+typename std::iterator_traits<It>::difference_type
+count_if(Policy&&, It first, It last, Pred pred) {
+    using D = typename std::iterator_traits<It>::difference_type;
+    using E = typename std::iterator_traits<It>::value_type;
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        return n ? static_cast<D>(detail::device_count_if<E, Pred>(&*first, n, pred)) : D{};
+    } else {
+        return std::count_if(first, last, pred);  // 3-arg form not routed
+    }
+}
+
+// all_of/any_of/none_of derive from count_if (offloads when the predicate is captureless;
+// pSTL-Bench's any_of/none_of capture a value and cleanly fall back to the host).
+template <class Policy, class It, class Pred>
+bool all_of(Policy&& pol, It first, It last, Pred pred) {
+    auto n = static_cast<typename std::iterator_traits<It>::difference_type>(std::distance(first, last));
+    return count_if(std::forward<Policy>(pol), first, last, pred) == n;
+}
+template <class Policy, class It, class Pred>
+bool any_of(Policy&& pol, It first, It last, Pred pred) {
+    return count_if(std::forward<Policy>(pol), first, last, pred) > 0;
+}
+template <class Policy, class It, class Pred>
+bool none_of(Policy&& pol, It first, It last, Pred pred) {
+    return count_if(std::forward<Policy>(pol), first, last, pred) == 0;
 }
 
 } // namespace parallax
