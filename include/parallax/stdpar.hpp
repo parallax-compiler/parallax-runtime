@@ -162,6 +162,34 @@ __attribute__((noinline)) void device_scan(const T* in, T* out, std::size_t n) {
     for (std::size_t i = 0; i < n; ++i) { acc = acc + in[i]; out[i] = acc; }
 }
 
+// transform_reduce funnel (default '+' combine): reduce f(x) over the range. The plugin
+// generates a transform kernel (from F, T->U) under ":xform" and a '+' reduce kernel
+// (for U) under ":reduce". Returns the pure GPU sum in U (caller host-combines init).
+// MVP: captureless transform op.
+template <class T, class U, class F>
+__attribute__((noinline)) U device_transform_reduce(const T* in, std::size_t n, F f) {
+    static parallax_kernel_t kx =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":xform").c_str());
+    static parallax_kernel_t kr =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":reduce").c_str());
+    if (kx && kr && std::is_empty_v<F>) {
+        void* ai = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        void* ao = parallax_arena_alloc(n * sizeof(U), alignof(U));
+        if (ai && ao) {
+            std::memcpy(ai, in, n * sizeof(T));
+            parallax_kernel_launch_transform2(kx, ai, ao, n, sizeof(T), sizeof(U));
+            U gpu{};
+            parallax_reduce(kr, ao, n, sizeof(U), &gpu);
+            parallax_arena_free(ao);
+            parallax_arena_free(ai);
+            return gpu;
+        }
+    }
+    U acc{};
+    for (std::size_t i = 0; i < n; ++i) acc = acc + static_cast<U>(f(in[i]));
+    return acc;
+}
+
 } // namespace detail
 
 namespace detail {
@@ -257,6 +285,22 @@ OutIt inclusive_scan(Policy&&, It first, It last, OutIt d_first) {
         std::inclusive_scan(first, last, d_first);  // 3-arg form is not routed
     }
     return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
+}
+
+template <class Policy, class It, class T, class BinOp, class UnOp>
+T transform_reduce(Policy&&, It first, It last, T init, BinOp bop, UnOp uop) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        // MVP: default '+' combine; reduce the transform output type U on the GPU and
+        // host-combine init (so T may differ from U, e.g. float elements -> double init).
+        using E = typename std::iterator_traits<It>::value_type;
+        using U = std::decay_t<decltype(uop(std::declval<E>()))>;
+        if (n == 0) return init;
+        U gpu = detail::device_transform_reduce<E, U, UnOp>(&*first, n, uop);
+        return init + static_cast<T>(gpu);
+    } else {
+        return std::transform_reduce(first, last, init, bop, uop);  // 5-arg-ish not routed
+    }
 }
 
 } // namespace parallax
