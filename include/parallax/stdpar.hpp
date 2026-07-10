@@ -194,6 +194,11 @@ __attribute__((noinline)) U device_transform_reduce(const T* in, std::size_t n, 
 // (":reduce"). Returns the count. MVP: captureless predicate.
 template <class T, class Pred>
 __attribute__((noinline)) long device_count_if(const T* in, std::size_t n, Pred pred) {
+    // NOTE: routing + funnel are wired, but the predicate-count transform kernel for
+    // integer elements currently emits an i32/i64-mismatched load (invalid SPIR-V that
+    // lavapipe nonetheless runs, yielding a garbage count). Until that codegen is fixed,
+    // keep count_if on the correct host path. Flip PARALLAX_COUNT_IF_GPU to re-enable.
+#if defined(PARALLAX_COUNT_IF_GPU)
     static parallax_kernel_t kp =
         parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":pred").c_str());
     static parallax_kernel_t kr =
@@ -211,6 +216,7 @@ __attribute__((noinline)) long device_count_if(const T* in, std::size_t n, Pred 
             return gpu;
         }
     }
+#endif  // PARALLAX_COUNT_IF_GPU
     long c = 0;
     for (std::size_t i = 0; i < n; ++i) if (pred(in[i])) ++c;
     return c;
