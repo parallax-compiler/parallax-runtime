@@ -344,18 +344,20 @@ count_if(Policy&&, It first, It last, Pred pred) {
 
 // all_of/any_of/none_of derive from count_if (offloads when the predicate is captureless;
 // pSTL-Bench's any_of/none_of capture a value and cleanly fall back to the host).
+// NB: call parallax::count_if QUALIFIED — an unqualified count_if(pol, ...) is ambiguous
+// via ADL (the std:: policy/iterator args also find std::count_if's execution-policy overload).
 template <class Policy, class It, class Pred>
 bool all_of(Policy&& pol, It first, It last, Pred pred) {
     auto n = static_cast<typename std::iterator_traits<It>::difference_type>(std::distance(first, last));
-    return count_if(std::forward<Policy>(pol), first, last, pred) == n;
+    return parallax::count_if(std::forward<Policy>(pol), first, last, pred) == n;
 }
 template <class Policy, class It, class Pred>
 bool any_of(Policy&& pol, It first, It last, Pred pred) {
-    return count_if(std::forward<Policy>(pol), first, last, pred) > 0;
+    return parallax::count_if(std::forward<Policy>(pol), first, last, pred) > 0;
 }
 template <class Policy, class It, class Pred>
 bool none_of(Policy&& pol, It first, It last, Pred pred) {
-    return count_if(std::forward<Policy>(pol), first, last, pred) == 0;
+    return parallax::count_if(std::forward<Policy>(pol), first, last, pred) == 0;
 }
 
 } // namespace parallax
