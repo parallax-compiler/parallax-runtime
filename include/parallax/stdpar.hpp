@@ -292,6 +292,21 @@ void fill(Policy&&, It first, It last, const V& value) {
     }
 }
 
+// generate = a map that writes gen() per element. Reuses the device_invoke funnel with a
+// setter [gen](E& x){ x = gen(); }; the plugin inlines gen()'s operator() into the kernel.
+// A gen that can't codegen (stateful/RNG) stays correct via the host fallback in
+// device_invoke. Parallel semantics require gen() be effectively pure/constant per call.
+template <class Policy, class It, class Gen>
+void generate(Policy&&, It first, It last, Gen gen) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        using E = typename std::iterator_traits<It>::value_type;
+        if (n) detail::device_invoke(&*first, n, [gen](E& x){ x = gen(); });
+    } else {
+        std::generate(first, last, gen);  // 3-arg form is not routed -> no recursion
+    }
+}
+
 template <class Policy, class It>
 void sort(Policy&&, It first, It last) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
