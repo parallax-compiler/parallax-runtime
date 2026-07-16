@@ -162,6 +162,34 @@ __attribute__((noinline)) void device_scan(const T* in, T* out, std::size_t n) {
     for (std::size_t i = 0; i < n; ++i) { acc = acc + in[i]; out[i] = acc; }
 }
 
+// Exclusive-scan funnel (default '+'). Registers THREE fixed kernels under ":scan"/":add"
+// (the inclusive-scan pair) and ":shift" (the finalize kernel). The GPU path stages a
+// scratch copy of `in`, inclusive-scans it, then the shift kernel writes
+// out[i] = init + (i>0 ? incl[i-1] : 0). Host fallback keeps ISO semantics on a MISS.
+template <class T>
+__attribute__((noinline)) void device_exclusive_scan(const T* in, T* out, std::size_t n, T init) {
+    static parallax_kernel_t ks =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scan").c_str());
+    static parallax_kernel_t ka =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":add").c_str());
+    static parallax_kernel_t kh =
+        parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":shift").c_str());
+    if (ks && ka && kh) {
+        void* as = parallax_arena_alloc(n * sizeof(T), alignof(T));  // scratch: inclusive scan
+        void* ao = parallax_arena_alloc(n * sizeof(T), alignof(T));  // output
+        if (as && ao) {
+            std::memcpy(as, in, n * sizeof(T));
+            parallax_exclusive_scan(ks, ka, kh, as, ao, n, sizeof(T), &init);
+            std::memcpy(out, ao, n * sizeof(T));
+            parallax_arena_free(ao);
+            parallax_arena_free(as);
+            return;
+        }
+    }
+    T acc = init;
+    for (std::size_t i = 0; i < n; ++i) { T t = in[i]; out[i] = acc; acc = acc + t; }
+}
+
 // transform_reduce funnel (default '+' combine): reduce f(x) over the range. The plugin
 // generates a transform kernel (from F, T->U) under ":xform" and a '+' reduce kernel
 // (for U) under ":reduce". Returns the pure GPU sum in U (caller host-combines init).
@@ -324,6 +352,21 @@ OutIt inclusive_scan(Policy&&, It first, It last, OutIt d_first) {
         if (n) detail::device_scan(&*first, &*d_first, n);
     } else {
         std::inclusive_scan(first, last, d_first);  // 3-arg form is not routed
+    }
+    return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
+}
+
+// exclusive_scan(par, first, last, d_first, init): out[0]=init, out[i]=init+sum(in[0..i-1]).
+// Default '+' only (custom op / non-arithmetic init -> the routed 5-arg form still hits this;
+// the GPU kernel is '+'-only, so a MISS or unsupported element type falls back on the host).
+template <class Policy, class It, class OutIt, class T>
+OutIt exclusive_scan(Policy&&, It first, It last, OutIt d_first, T init) {
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        using E = typename std::iterator_traits<It>::value_type;
+        if (n) detail::device_exclusive_scan(&*first, &*d_first, n, static_cast<E>(init));
+    } else {
+        std::exclusive_scan(first, last, d_first, init);  // 4-arg form is not routed
     }
     return std::next(d_first, static_cast<typename std::iterator_traits<OutIt>::difference_type>(n));
 }

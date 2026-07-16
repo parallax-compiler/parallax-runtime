@@ -44,6 +44,13 @@ void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
 void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
                    void* data, size_t count, size_t elem_size);
 
+/* Exclusive prefix scan (Phase 5), fully on-GPU. Inclusive-scans `input` in place
+ * (pass a scratch copy) with scan_kernel+add_kernel, then shift_kernel writes
+ * output[i] = init + (i>0 ? incl[i-1] : 0). `init` points at elem_size bytes. */
+void parallax_exclusive_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
+                             parallax_kernel_t shift_kernel, void* input, void* output,
+                             size_t count, size_t elem_size, const void* init);
+
 /* Bitonic sort (Phase 5). Sorts `data` in place ascending; `count` must be a power
  * of two (the caller pads otherwise). The kernel is a global compare-exchange stage
  * dispatched over the bitonic (k, j) schedule. */

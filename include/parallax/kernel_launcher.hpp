@@ -64,6 +64,14 @@ public:
     bool launch_scan(const std::string& scan_kernel, const std::string& add_kernel,
                      void* data, size_t count, size_t elem_size);
 
+    // Exclusive prefix scan (Phase 5), fully on-GPU. Runs the inclusive scan over
+    // `input` (in place; caller passes a scratch copy) via scan_kernel+add_kernel, then
+    // the shift_kernel writes `output[i] = init + (i>0 ? incl[i-1] : 0)`. `init` points
+    // at elem_size bytes (the caller's init value). Default '+'. Same count limit as scan.
+    bool launch_exclusive_scan(const std::string& scan_kernel, const std::string& add_kernel,
+                               const std::string& shift_kernel, void* input, void* output,
+                               size_t count, size_t elem_size, const void* init);
+
     // Bitonic sort (Phase 5). Sorts `data` in place ascending. The kernel is a
     // global compare-exchange stage dispatched O(log^2 n) times over the (k,j)
     // schedule. MVP: count must be a power of two (the caller pads otherwise).
@@ -99,6 +107,15 @@ private:
     bool dispatch_sort_stage(PipelineData& pipeline_data,
                              VkBuffer data_buf, VkDeviceSize data_off, VkDeviceSize data_range,
                              uint32_t count, uint32_t k, uint32_t j, uint32_t groups);
+
+    // Exclusive-scan finalize: bind in@0 (inclusive scan), out@1 (+ dummy uniform@2),
+    // push { uint count@0, elem init@8 } (init_bytes = elem_size), dispatch `groups`
+    // workgroups. Writes out[i] = init + (i>0 ? in[i-1] : 0).
+    bool dispatch_exclusive_shift(PipelineData& pipeline_data,
+                                  VkBuffer in_buf, VkDeviceSize in_off, VkDeviceSize in_range,
+                                  VkBuffer out_buf, VkDeviceSize out_off, VkDeviceSize out_range,
+                                  uint32_t count, const void* init, size_t init_bytes,
+                                  uint32_t groups);
 
     // Compaction scatter: bind input@0, output@1, positions@3 (+ dummy uniform@2),
     // push { count }, dispatch `groups` workgroups. Writes each kept element to its

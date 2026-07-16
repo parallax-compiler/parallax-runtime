@@ -1117,6 +1117,139 @@ bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::stri
     return true;
 }
 
+// Exclusive-scan finalize dispatch: in@0 (inclusive scan) -> out@1, push { uint count@0,
+// elem init@8 }. Binds a dummy uniform@2 to complete the shared 3-binding layout.
+bool KernelLauncher::dispatch_exclusive_shift(PipelineData& pipeline_data,
+                                              VkBuffer in_buf, VkDeviceSize in_off, VkDeviceSize in_range,
+                                              VkBuffer out_buf, VkDeviceSize out_off, VkDeviceSize out_range,
+                                              uint32_t count, const void* init, size_t init_bytes,
+                                              uint32_t groups) {
+    VkDescriptorSetAllocateInfo alloc_info{};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = descriptor_pool_;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &pipeline_data.descriptor_set_layout;
+    VkDescriptorSet descriptor_set;
+    if (vkAllocateDescriptorSets(backend_->device(), &alloc_info, &descriptor_set) != VK_SUCCESS) {
+        std::cerr << "[exscan] Failed to allocate descriptor set" << std::endl;
+        return false;
+    }
+
+    VkDescriptorBufferInfo in_info{in_buf, in_off, in_range};
+    VkDescriptorBufferInfo out_info{out_buf, out_off, out_range};
+
+    // Dummy uniform for binding 2 (unused by the shift kernel but in the layout).
+    VkBuffer dummy_buf = VK_NULL_HANDLE;
+    VkDeviceMemory dummy_mem = VK_NULL_HANDLE;
+    VkBufferCreateInfo ubi{};
+    ubi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    ubi.size = 64;
+    ubi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    ubi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(backend_->device(), &ubi, nullptr, &dummy_buf);
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(backend_->device(), dummy_buf, &mr);
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = memory_manager_->find_memory_type(
+        mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(backend_->device(), &mai, nullptr, &dummy_mem);
+    vkBindBufferMemory(backend_->device(), dummy_buf, dummy_mem, 0);
+    VkDescriptorBufferInfo dummy_info{dummy_buf, 0, VK_WHOLE_SIZE};
+    transient_buffers_.emplace_back(dummy_buf, dummy_mem);
+
+    VkWriteDescriptorSet writes[3]{};
+    VkDescriptorBufferInfo* storage[2] = {&in_info, &out_info};
+    for (int i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = descriptor_set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].descriptorCount = 1;
+        writes[i].pBufferInfo = storage[i];
+    }
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = descriptor_set;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[2].descriptorCount = 1;
+    writes[2].pBufferInfo = &dummy_info;
+    vkUpdateDescriptorSets(backend_->device(), 3, writes, 0, nullptr);
+
+    sync();
+    vkResetFences(backend_->device(), 1, &fence_);
+    vkResetCommandBuffer(command_buffer_, 0);
+
+    VkCommandBufferBeginInfo begin_info{};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(command_buffer_, &begin_info);
+    vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_data.pipeline);
+    vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipeline_data.layout, 0, 1, &descriptor_set, 0, nullptr);
+    // push { uint count@0, elem init@8 } packed into the fixed 24-byte range.
+    unsigned char push[24] = {0};
+    std::memcpy(push + 0, &count, sizeof(uint32_t));
+    if (init && init_bytes && init_bytes <= 8) std::memcpy(push + 8, init, init_bytes);
+    vkCmdPushConstants(command_buffer_, pipeline_data.layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(push), push);
+    vkCmdDispatch(command_buffer_, groups, 1, 1);
+    vkEndCommandBuffer(command_buffer_);
+
+    VkSubmitInfo submit_info{};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &command_buffer_;
+    if (vkQueueSubmit(backend_->compute_queue(), 1, &submit_info, fence_) != VK_SUCCESS) {
+        std::cerr << "[exscan] Failed to submit command buffer" << std::endl;
+        return false;
+    }
+    fence_signaled_ = false;
+    sync();
+    return true;
+}
+
+bool KernelLauncher::launch_exclusive_scan(const std::string& scan_kernel, const std::string& add_kernel,
+                                           const std::string& shift_kernel, void* input, void* output,
+                                           size_t count, size_t elem_size, const void* init) {
+    ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
+    auto hit = pipelines_.find(shift_kernel);
+    if (hit == pipelines_.end()) { std::cerr << "[exscan] shift kernel not found" << std::endl; return false; }
+    if (count == 0) return true;
+
+    UnifiedArena* arena = get_global_arena();
+    if (!arena || !arena->valid()) { std::cerr << "[exscan] requires arena" << std::endl; return false; }
+
+    // 1) Inclusive scan of `input` in place (input is the caller's scratch copy of src).
+    //    launch_scan is reentrancy-guarded so it won't re-migrate under this scope.
+    if (count > 1 && !launch_scan(scan_kernel, add_kernel, input, count, elem_size)) return false;
+
+    // 2) Resolve the inclusive-scan buffer (in@0) and the output buffer (out@1).
+    auto resolve = [&](void* p, const char* tag, VkBuffer& buf, VkDeviceSize& off, VkDeviceSize& range) -> bool {
+        range = count * elem_size;
+        if (arena->contains(p)) { buf = arena->buffer(); off = arena->offset_of(p); return true; }
+        VkBuffer reg = memory_manager_->get_buffer(p);
+        if (reg == VK_NULL_HANDLE) { memory_manager_->register_external_buffer(p, range); reg = memory_manager_->get_buffer(p); }
+        if (reg == VK_NULL_HANDLE) { std::cerr << "[exscan] bad " << tag << " buffer" << std::endl; return false; }
+        memory_manager_->sync_before_kernel(p);
+        buf = reg; off = 0; range = VK_WHOLE_SIZE; return true;
+    };
+    VkBuffer in_buf, out_buf; VkDeviceSize in_off, out_off, in_range, out_range;
+    if (!resolve(input, "in", in_buf, in_off, in_range)) return false;
+    if (!resolve(output, "out", out_buf, out_off, out_range)) return false;
+
+    // 3) Shift: out[i] = init + (i>0 ? incl[i-1] : 0).
+    const uint32_t groups = static_cast<uint32_t>((count + 255) / 256);
+    if (!dispatch_exclusive_shift(hit->second, in_buf, in_off, in_range,
+                                  out_buf, out_off, out_range,
+                                  static_cast<uint32_t>(count), init, elem_size, groups))
+        return false;
+
+    if (!arena->contains(output)) memory_manager_->sync_after_kernel(output);
+    return true;
+}
+
 // Push block for the bitonic stage: { uint count, uint k, uint j } (12 bytes, fits
 // the shared 24-byte push range). k/j select the compare-exchange schedule.
 namespace { struct SortPush { uint32_t count; uint32_t k; uint32_t j; }; }

@@ -284,6 +284,24 @@ void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
     }
 }
 
+void parallax_exclusive_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
+                             parallax_kernel_t shift_kernel, void* input, void* output,
+                             size_t count, size_t elem_size, const void* init) {
+    if (!scan_kernel || !add_kernel || !shift_kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_exclusive_scan] invalid kernels or launcher" << std::endl;
+        return;
+    }
+    auto* sh = reinterpret_cast<KernelHandle*>(scan_kernel);
+    auto* ah = reinterpret_cast<KernelHandle*>(add_kernel);
+    auto* hh = reinterpret_cast<KernelHandle*>(shift_kernel);
+    std::cout << "[parallax_exclusive_scan] scan=" << sh->name << " shift=" << hh->name
+              << " count=" << count << " elem_size=" << elem_size << std::endl;
+    if (!g_kernel_launcher->launch_exclusive_scan(sh->name, ah->name, hh->name,
+                                                  input, output, count, elem_size, init)) {
+        std::cerr << "[parallax_exclusive_scan] scan failed" << std::endl;
+    }
+}
+
 void parallax_sort(parallax_kernel_t kernel, void* data, size_t count, size_t elem_size) {
     if (!kernel || !g_kernel_launcher) {
         std::cerr << "[parallax_sort] invalid kernel or launcher" << std::endl;
