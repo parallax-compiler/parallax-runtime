@@ -32,6 +32,13 @@ void parallax_kernel_launch_transform2(parallax_kernel_t kernel, void* in_buffer
                                        void* out_buffer, size_t count,
                                        size_t in_elem_size, size_t out_elem_size);
 
+/* Transform whose op captures by value: `captures` (capture_size bytes) is bound as
+ * the uniform@2 block. Same 2-buffer (in@0, out@1) shape as transform2. */
+void parallax_kernel_launch_transform2_captures(parallax_kernel_t kernel, void* in_buffer,
+                                                void* out_buffer, size_t count,
+                                                size_t in_elem_size, size_t out_elem_size,
+                                                void* captures, size_t capture_size);
+
 /* Parallel reduction (Phase 3). Reduces `count` elements of `data` to a single
  * scalar using the loaded workgroup-reduction kernel, writing elem_size bytes to
  * `result`. The kernel uses the '+' identity (0); the caller combines any init.

@@ -35,9 +35,13 @@ public:
                 size_t elem_size = sizeof(float));
 
     // Transform launch (in/out buffers + count). out_elem_size may differ from the
-    // input element size (e.g. a float -> double map); 0 means "same as in".
+    // input element size (e.g. a float -> double map); 0 means "same as in". When
+    // `captures` is non-null, its `capture_size` bytes are bound as the uniform@2 block
+    // (a capturing transform op); otherwise binding 2 is a zero dummy. The captures path
+    // bypasses the descriptor cache (captures vary per call).
     bool launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer,
-                          size_t count, size_t elem_size = sizeof(float), size_t out_elem_size = 0);
+                          size_t count, size_t elem_size = sizeof(float), size_t out_elem_size = 0,
+                          void* captures = nullptr, size_t capture_size = 0);
 
     // NEW V2: Launch with captured parameters (for function objects)
     bool launch_with_captures(

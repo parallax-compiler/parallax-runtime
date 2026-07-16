@@ -77,12 +77,19 @@ __attribute__((noinline)) void device_invoke(T* data, std::size_t n, F f) {
 template <class Tin, class Tout, class F>
 __attribute__((noinline)) void device_transform(const Tin* in, Tout* out, std::size_t n, F f) {
     static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
-    if (k && std::is_empty_v<F>) {
+    if (k) {
         void* ai = parallax_arena_alloc(n * sizeof(Tin), alignof(Tin));
         void* ao = parallax_arena_alloc(n * sizeof(Tout), alignof(Tout));
         if (ai && ao) {
             std::memcpy(ai, in, n * sizeof(Tin));
-            parallax_kernel_launch_transform2(k, ai, ao, n, sizeof(Tin), sizeof(Tout));
+            if constexpr (std::is_empty_v<F>) {
+                parallax_kernel_launch_transform2(k, ai, ao, n, sizeof(Tin), sizeof(Tout));
+            } else {
+                // Capturing transform op: bind the closure bytes as the uniform@2 block
+                // (the kernel reads its captures there, exactly like a for_each capture).
+                parallax_kernel_launch_transform2_captures(k, ai, ao, n, sizeof(Tin), sizeof(Tout),
+                                                           static_cast<void*>(&f), sizeof(F));
+            }
             std::memcpy(out, ao, n * sizeof(Tout));
             parallax_arena_free(ao);
             parallax_arena_free(ai);

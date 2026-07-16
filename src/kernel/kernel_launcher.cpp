@@ -447,7 +447,7 @@ bool KernelLauncher::launch(const std::string& kernel_name, void* buffer, size_t
     return launch(kernel_name, buffer, count, 1.0f, elem_size);
 }
 
-bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count, size_t elem_size, size_t out_elem_size) {
+bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_buffer, void* out_buffer, size_t count, size_t elem_size, size_t out_elem_size, void* captures, size_t capture_size) {
     ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) {
@@ -496,9 +496,12 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
     // Check descriptor cache (multi-buffer key is complex, for MVP we use a simple combination)
     // Actually, for transform we have 2 buffers. We'll use the out_buffer as the key part for now
     // or better, a combined key. For now, let's just use the out_buffer since layout is fixed.
+    // Captures vary per call, so a capturing transform bypasses the descriptor cache
+    // (a cached set keyed by out_buffer would rebind stale capture bytes).
+    const bool has_captures = (captures != nullptr && capture_size > 0);
     CacheKey key{pipeline_data.descriptor_set_layout, out_buffer};
     VkDescriptorSet descriptor_set;
-    if (descriptor_cache_.count(key)) {
+    if (!has_captures && descriptor_cache_.count(key)) {
         descriptor_set = descriptor_cache_[key];
     } else {
         // Allocate descriptor set
@@ -523,12 +526,13 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
         buffer_infos[1].offset = out_off;
         buffer_infos[1].range = out_size ? static_cast<VkDeviceSize>(out_size) : VK_WHOLE_SIZE;
 
-        // Create dummy uniform buffer for captures
+        // Binding 2 uniform: the captures block for a capturing transform op, or a zero
+        // dummy for a captureless one. Same layout as launch_with_captures' scalar path.
         VkBuffer dummy_uniform_buffer = VK_NULL_HANDLE;
         VkDeviceMemory dummy_uniform_memory = VK_NULL_HANDLE;
         VkBufferCreateInfo uniform_buf_info{};
         uniform_buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        uniform_buf_info.size = 64; // Small buffer
+        uniform_buf_info.size = std::max<size_t>(capture_size, 64);
         uniform_buf_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         uniform_buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -545,6 +549,13 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
 
         vkAllocateMemory(backend_->device(), &alloc, nullptr, &dummy_uniform_memory);
         vkBindBufferMemory(backend_->device(), dummy_uniform_buffer, dummy_uniform_memory, 0);
+
+        if (has_captures) {
+            void* mapped_data = nullptr;
+            vkMapMemory(backend_->device(), dummy_uniform_memory, 0, capture_size, 0, &mapped_data);
+            std::memcpy(mapped_data, captures, capture_size);
+            vkUnmapMemory(backend_->device(), dummy_uniform_memory);
+        }
 
         VkDescriptorBufferInfo captures_buffer_info{};
         captures_buffer_info.buffer = dummy_uniform_buffer;
@@ -572,15 +583,15 @@ bool KernelLauncher::launch_transform(const std::string& kernel_name, void* in_b
         writes[2].pBufferInfo = &captures_buffer_info;
 
         vkUpdateDescriptorSets(backend_->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-        descriptor_cache_[key] = descriptor_set;
+        if (!has_captures) descriptor_cache_[key] = descriptor_set;  // captures vary per call
 
         transient_buffers_.emplace_back(dummy_uniform_buffer, dummy_uniform_memory);
     }
-    
+
     // Wait for previous operations if any
     sync();
     vkResetFences(backend_->device(), 1, &fence_);
-    
+
     // Record command buffer (same logic as launch)
     vkResetCommandBuffer(command_buffer_, 0);
     
