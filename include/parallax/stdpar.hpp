@@ -251,6 +251,107 @@ __attribute__((noinline)) long device_count_if(const T* in, std::size_t n, Pred 
     return c;
 }
 
+// Compaction funnels (deterministic — so they offload in GENERIC wrappers, unlike the
+// concrete-only collector path). Each looks up four kernels (:flags/:scan/:add/:scatter)
+// and calls parallax_copy_if, which returns the kept count (num_true for partition).
+// copy_if writes to a separate output; remove_if/unique/partition compact in place. Host
+// fallback on a MISS keeps ISO semantics. MVP: captureless predicate (std::is_empty_v).
+template <class T, class Pred>
+__attribute__((noinline)) std::size_t device_copy_if(const T* in, T* out, std::size_t n, Pred pred) {
+    static parallax_kernel_t kf = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":flags").c_str());
+    static parallax_kernel_t ks = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scan").c_str());
+    static parallax_kernel_t ka = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":add").c_str());
+    static parallax_kernel_t kc = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scatter").c_str());
+    if (kf && ks && ka && kc && std::is_empty_v<Pred>) {
+        void* ai = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        void* ao = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        if (ai && ao) {
+            std::memcpy(ai, in, n * sizeof(T));
+            std::size_t kept = parallax_copy_if(kf, ks, ka, kc, ai, ao, n, sizeof(T),
+                                                std::is_floating_point_v<T> ? 1 : 0);
+            std::memcpy(out, ao, kept * sizeof(T));
+            parallax_arena_free(ao);
+            parallax_arena_free(ai);
+            return kept;
+        }
+    }
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < n; ++i) if (pred(in[i])) out[k++] = in[i];
+    return k;
+}
+
+template <class T, class Pred>
+__attribute__((noinline)) std::size_t device_remove_if(T* data, std::size_t n, Pred pred) {
+    static parallax_kernel_t kf = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":flags").c_str());
+    static parallax_kernel_t ks = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scan").c_str());
+    static parallax_kernel_t ka = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":add").c_str());
+    static parallax_kernel_t kc = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scatter").c_str());
+    if (kf && ks && ka && kc && std::is_empty_v<Pred>) {
+        void* ai = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        void* ao = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        if (ai && ao) {
+            std::memcpy(ai, data, n * sizeof(T));
+            std::size_t kept = parallax_copy_if(kf, ks, ka, kc, ai, ao, n, sizeof(T),
+                                                std::is_floating_point_v<T> ? 1 : 0);
+            std::memcpy(data, ao, kept * sizeof(T));  // compacted (predicate-FALSE) elements
+            parallax_arena_free(ao);
+            parallax_arena_free(ai);
+            return kept;
+        }
+    }
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < n; ++i) if (!pred(data[i])) data[k++] = data[i];
+    return k;
+}
+
+template <class T, class Pred>
+__attribute__((noinline)) std::size_t device_partition(T* data, std::size_t n, Pred pred) {
+    static parallax_kernel_t kf = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":flags").c_str());
+    static parallax_kernel_t ks = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scan").c_str());
+    static parallax_kernel_t ka = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":add").c_str());
+    static parallax_kernel_t kc = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scatter").c_str());
+    if (kf && ks && ka && kc && std::is_empty_v<Pred>) {
+        void* ai = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        void* ao = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        if (ai && ao) {
+            std::memcpy(ai, data, n * sizeof(T));
+            // The partition scatter writes EVERY element (kept to the front, rest after);
+            // parallax_copy_if returns num_true (the partition point).
+            std::size_t num_true = parallax_copy_if(kf, ks, ka, kc, ai, ao, n, sizeof(T),
+                                                    std::is_floating_point_v<T> ? 1 : 0);
+            std::memcpy(data, ao, n * sizeof(T));  // all n elements, reordered
+            parallax_arena_free(ao);
+            parallax_arena_free(ai);
+            return num_true;
+        }
+    }
+    T* mid = std::partition(data, data + n, pred);
+    return static_cast<std::size_t>(mid - data);
+}
+
+template <class T>
+__attribute__((noinline)) std::size_t device_unique(T* data, std::size_t n) {
+    static parallax_kernel_t kf = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":flags").c_str());
+    static parallax_kernel_t ks = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scan").c_str());
+    static parallax_kernel_t ka = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":add").c_str());
+    static parallax_kernel_t kc = parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":scatter").c_str());
+    if (kf && ks && ka && kc) {
+        void* ai = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        void* ao = parallax_arena_alloc(n * sizeof(T), alignof(T));
+        if (ai && ao) {
+            std::memcpy(ai, data, n * sizeof(T));
+            std::size_t kept = parallax_copy_if(kf, ks, ka, kc, ai, ao, n, sizeof(T),
+                                                std::is_floating_point_v<T> ? 1 : 0);
+            std::memcpy(data, ao, kept * sizeof(T));
+            parallax_arena_free(ao);
+            parallax_arena_free(ai);
+            return kept;
+        }
+    }
+    T* e = std::unique(data, data + n);
+    return static_cast<std::size_t>(e - data);
+}
+
 } // namespace detail
 
 namespace detail {
@@ -423,6 +524,61 @@ bool any_of(Policy&& pol, It first, It last, Pred pred) {
 template <class Policy, class It, class Pred>
 bool none_of(Policy&& pol, It first, It last, Pred pred) {
     return parallax::count_if(std::forward<Policy>(pol), first, last, pred) == 0;
+}
+
+// Compaction family (funnelled). copy_if writes kept elements to d_first; remove_if/unique
+// compact in place and return the new end; partition reorders in place and returns the
+// partition point. Host fallbacks call the QUALIFIED std:: algorithm (no ADL recursion).
+template <class Policy, class It, class OutIt, class Pred>
+OutIt copy_if(Policy&&, It first, It last, OutIt d_first, Pred pred) {
+    using D = typename std::iterator_traits<OutIt>::difference_type;
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        using E = typename std::iterator_traits<It>::value_type;
+        std::size_t kept = n ? detail::device_copy_if<E, Pred>(&*first, &*d_first, n, pred) : 0;
+        return std::next(d_first, static_cast<D>(kept));
+    } else {
+        return std::copy_if(first, last, d_first, pred);  // 4-arg form not routed
+    }
+}
+
+template <class Policy, class It, class Pred>
+It remove_if(Policy&&, It first, It last, Pred pred) {
+    using D = typename std::iterator_traits<It>::difference_type;
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        using E = typename std::iterator_traits<It>::value_type;
+        std::size_t kept = n ? detail::device_remove_if<E, Pred>(&*first, n, pred) : 0;
+        return std::next(first, static_cast<D>(kept));
+    } else {
+        return std::remove_if(first, last, pred);  // 3-arg form not routed
+    }
+}
+
+template <class Policy, class It, class Pred>
+It partition(Policy&&, It first, It last, Pred pred) {
+    using D = typename std::iterator_traits<It>::difference_type;
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        using E = typename std::iterator_traits<It>::value_type;
+        std::size_t nt = n ? detail::device_partition<E, Pred>(&*first, n, pred) : 0;
+        return std::next(first, static_cast<D>(nt));
+    } else {
+        return std::partition(first, last, pred);  // 3-arg form not routed
+    }
+}
+
+template <class Policy, class It>
+It unique(Policy&&, It first, It last) {
+    using D = typename std::iterator_traits<It>::difference_type;
+    auto n = static_cast<std::size_t>(std::distance(first, last));
+    if constexpr (detail::is_offload_policy_v<Policy>) {
+        using E = typename std::iterator_traits<It>::value_type;
+        std::size_t kept = n ? detail::device_unique<E>(&*first, n) : 0;
+        return std::next(first, static_cast<D>(kept));
+    } else {
+        return std::unique(first, last);  // 2-arg form not routed
+    }
 }
 
 } // namespace parallax
