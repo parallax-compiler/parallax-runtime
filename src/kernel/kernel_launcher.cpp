@@ -1552,10 +1552,16 @@ bool KernelLauncher::launch_compact(const std::string& flags_kernel, const std::
     // the device buffer, so migrate positions back to the host mapping before reading
     // (no-op on UMA). launch_scan's own scope did not invalidate — it was nested.
     if (arena) arena->invalidate_from_device();
-    // The positions buffer holds the element type, so read float or int32 accordingly.
-    size_t kept = elem_is_float
-                      ? static_cast<size_t>(static_cast<float*>(positions)[count - 1])
-                      : static_cast<size_t>(static_cast<int32_t*>(positions)[count - 1]);
+    // The positions buffer holds the element type, so read the last scan value with the
+    // matching width/kind: 4/8-byte float or int (double/int64 are exact for any count).
+    void* last = static_cast<char*>(positions) + (count - 1) * elem_size;
+    size_t kept;
+    if (elem_is_float)
+        kept = (elem_size >= 8) ? static_cast<size_t>(*static_cast<double*>(last))
+                                : static_cast<size_t>(*static_cast<float*>(last));
+    else
+        kept = (elem_size >= 8) ? static_cast<size_t>(*static_cast<int64_t*>(last))
+                                : static_cast<size_t>(*static_cast<int32_t*>(last));
     if (out_kept) *out_kept = kept;
 
     // 4. scatter into the output. num_true (= kept) is read only by the partition
