@@ -127,6 +127,13 @@ template <class T>
 __attribute__((noinline)) T device_reduce(const T* data, std::size_t n, T init) {
     static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
     if (k) {
+        // Zero-copy: reduce reads the input only, so pool-resident data is reduced in
+        // place with no staging copy (the reduction uses its own arena scratch internally).
+        if (parallax_arena_contains(data)) {
+            T gpu{};
+            parallax_reduce(k, const_cast<T*>(data), n, sizeof(T), &gpu);
+            return init + gpu;
+        }
         void* ab = parallax_arena_alloc(n * sizeof(T), alignof(T));
         if (ab) {
             std::memcpy(ab, data, n * sizeof(T));
@@ -151,6 +158,12 @@ __attribute__((noinline)) void device_sort(T* data, std::size_t n) {
     if (k) {
         std::size_t m = 1;
         while (m < n) m <<= 1;                 // next power of two
+        // Zero-copy: when the count is already a power of two AND the data is pool-resident,
+        // bitonic-sort it in place — no padding buffer, no copies.
+        if (m == n && parallax_arena_contains(data)) {
+            parallax_sort(k, data, n, sizeof(T));
+            return;
+        }
         void* ab = parallax_arena_alloc(m * sizeof(T), alignof(T));
         if (ab) {
             T* pad = static_cast<T*>(ab);
@@ -176,6 +189,14 @@ __attribute__((noinline)) void device_scan(const T* in, T* out, std::size_t n) {
     static parallax_kernel_t ka =
         parallax_kernel_lookup((std::string(__PRETTY_FUNCTION__) + ":add").c_str());
     if (ks && ka) {
+        // Zero-copy: the scan runs in place. If both input and output are pool-resident,
+        // scan the output buffer directly (copying in->out first only when they differ),
+        // avoiding the arena scratch + its two copies.
+        if (parallax_arena_contains(in) && parallax_arena_contains(out)) {
+            if (in != out) std::memcpy(out, in, n * sizeof(T));
+            parallax_scan(ks, ka, out, n, sizeof(T));
+            return;
+        }
         void* ab = parallax_arena_alloc(n * sizeof(T), alignof(T));
         if (ab) {
             std::memcpy(ab, in, n * sizeof(T));
