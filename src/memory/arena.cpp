@@ -1,7 +1,9 @@
 #include "parallax/arena.hpp"
+#include "parallax/heap_pool.hpp"
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstdint>
 #include <iostream>
 
 namespace parallax {
@@ -178,6 +180,97 @@ bool UnifiedArena::initialize(VulkanBackend* backend, VkDeviceSize capacity) {
     return true;
 }
 
+bool UnifiedArena::initialize_from_pool(VulkanBackend* backend) {
+    backend_ = backend;
+    VkDevice dev = backend_ ? backend_->device() : VK_NULL_HANDLE;
+    if (dev == VK_NULL_HANDLE) return false;
+    const DeviceCapabilities& caps = backend_->capabilities();
+    if (!caps.external_memory_host) return false;
+
+    if (!px_pool_init()) return false;
+    void* base = px_pool_base();
+    size_t res = px_pool_reservation();
+    if (!base || res == 0) return false;
+    if ((reinterpret_cast<uintptr_t>(base) % caps.min_imported_host_pointer_alignment) != 0) {
+        std::cerr << "[UnifiedArena] pool base not import-aligned; using legacy arena\n";
+        return false;
+    }
+
+    const bool use_bda = caps.buffer_device_address;
+
+    // Which memory types can import this host pointer.
+    auto pHPP = reinterpret_cast<PFN_vkGetMemoryHostPointerPropertiesEXT>(
+        vkGetDeviceProcAddr(dev, "vkGetMemoryHostPointerPropertiesEXT"));
+    if (!pHPP) return false;
+    VkMemoryHostPointerPropertiesEXT hpp{};
+    hpp.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT;
+    if (pHPP(dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, base, &hpp) != VK_SUCCESS ||
+        hpp.memoryTypeBits == 0) {
+        return false;
+    }
+
+    // One device buffer aliasing the whole pool reservation.
+    VkExternalMemoryBufferCreateInfo embi{};
+    embi.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+    embi.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.pNext = &embi;
+    bci.size = res;
+    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (use_bda) bci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(dev, &bci, nullptr, &buffer_) != VK_SUCCESS) {
+        std::cerr << "[UnifiedArena] failed to create pool import buffer (" << (res >> 20)
+                  << " MiB); using legacy arena\n";
+        return false;
+    }
+
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(dev, buffer_, &req);
+    uint32_t bits = req.memoryTypeBits & hpp.memoryTypeBits;
+    if (bits == 0) { destroy(); return false; }
+    uint32_t idx = 0;
+    while (idx < 32 && !(bits & (1u << idx))) ++idx;
+
+    VkImportMemoryHostPointerInfoEXT imp{};
+    imp.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+    imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    imp.pHostPointer = base;
+    VkMemoryAllocateFlagsInfo flags{};
+    flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    flags.pNext = &imp;
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.pNext = use_bda ? static_cast<void*>(&flags) : static_cast<void*>(&imp);
+    mai.allocationSize = res;
+    mai.memoryTypeIndex = idx;
+    if (vkAllocateMemory(dev, &mai, nullptr, &memory_) != VK_SUCCESS) {
+        std::cerr << "[UnifiedArena] failed to import pool memory; using legacy arena\n";
+        destroy();
+        return false;
+    }
+    vkBindBufferMemory(dev, buffer_, memory_, 0);
+
+    if (use_bda) {
+        VkBufferDeviceAddressInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        ai.buffer = buffer_;
+        device_address_ = vkGetBufferDeviceAddress(dev, &ai);
+    }
+
+    host_base_ = base;                 // the pool mmap IS the host mapping (no vkMapMemory)
+    capacity_ = static_cast<VkDeviceSize>(res);
+    uma_ = true;                       // imported host memory is coherent (Phase 0 smoke)
+    pool_backed_ = true;
+    std::cout << "[UnifiedArena] Pool-backed: imported " << (res >> 20)
+              << " MiB heap pool as the device buffer, host_base=" << host_base_
+              << " device_address=0x" << std::hex << device_address_ << std::dec << std::endl;
+    return true;
+}
+
 void UnifiedArena::copy_range(VkBuffer src, VkBuffer dst, VkDeviceSize size) {
     if (size == 0 || xfer_cmd_ == VK_NULL_HANDLE) return;
     vkResetCommandBuffer(xfer_cmd_, 0);
@@ -210,8 +303,11 @@ void UnifiedArena::invalidate_from_device() {
 void UnifiedArena::destroy() {
     VkDevice dev = backend_ ? backend_->device() : VK_NULL_HANDLE;
     if (host_base_) {
-        // host_base_ maps the device memory (UMA) or the staging memory (discrete).
-        vkUnmapMemory(dev, uma_ ? memory_ : staging_memory_);
+        // host_base_ maps the device memory (UMA) or the staging memory (discrete). When
+        // pool-backed it IS the heap-pool mmap (never vkMapMemory'd, and owned by the pool
+        // for the process lifetime), so we must NOT unmap it — freeing memory_ below only
+        // releases the Vulkan import, not the mmap.
+        if (!pool_backed_) vkUnmapMemory(dev, uma_ ? memory_ : staging_memory_);
         host_base_ = nullptr;
     }
     if (xfer_fence_ != VK_NULL_HANDLE) { vkDestroyFence(dev, xfer_fence_, nullptr); xfer_fence_ = VK_NULL_HANDLE; }
@@ -228,6 +324,7 @@ void UnifiedArena::destroy() {
     }
     device_address_ = 0;
     uma_ = true;
+    pool_backed_ = false;
     free_list_.clear();
     live_.clear();
     bump_ = high_water_ = capacity_ = 0;
@@ -235,6 +332,11 @@ void UnifiedArena::destroy() {
 
 void* UnifiedArena::allocate(std::size_t size, std::size_t align) {
     if (size == 0 || !host_base_) return nullptr;
+    // Pool-backed: scratch comes from the same pool as the rest of the heap, so it lands
+    // in the imported device buffer (256-aligned for descriptor offsets). No separate
+    // arena free-list — the pool owns the whole reservation.
+    if (pool_backed_)
+        return px_pool_alloc(size, std::max<std::size_t>(align, kDefaultAlignment));
     const VkDeviceSize a = std::max<VkDeviceSize>(align, kDefaultAlignment);
     const VkDeviceSize need = align_up(size, a);
 
@@ -277,6 +379,7 @@ void* UnifiedArena::allocate(std::size_t size, std::size_t align) {
 
 void UnifiedArena::deallocate(void* ptr) {
     if (!ptr) return;
+    if (pool_backed_) { px_pool_free(ptr); return; }
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = live_.find(ptr);
     if (it == live_.end()) {

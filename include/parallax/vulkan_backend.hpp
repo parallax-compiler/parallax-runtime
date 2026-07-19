@@ -24,6 +24,10 @@ struct DeviceCapabilities {
     bool shader_int64 = false;
     bool shader_float64 = false;
     bool buffer_device_address = false;
+    // VK_EXT_external_memory_host: import a host mmap region (the heap pool) as a device
+    // buffer, so the whole captured heap is GPU-addressable with no copy (Phase 3).
+    bool     external_memory_host = false;
+    uint64_t min_imported_host_pointer_alignment = 4096;
 };
 
 class VulkanBackend {

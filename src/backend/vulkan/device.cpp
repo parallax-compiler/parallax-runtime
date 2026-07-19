@@ -220,6 +220,9 @@ bool VulkanBackend::create_logical_device() {
 #ifdef __APPLE__
     device_extensions.push_back("VK_KHR_portability_subset");
 #endif
+    // Whole-heap import (Phase 3): the arena adopts the heap pool as a device buffer.
+    if (capabilities_.external_memory_host)
+        device_extensions.push_back("VK_EXT_external_memory_host");
     
     VkDeviceCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -272,9 +275,35 @@ void VulkanBackend::detect_capabilities() {
     vkGetPhysicalDeviceFeatures2(physical_device_, &f2);
     capabilities_.buffer_device_address = bda.bufferDeviceAddress == VK_TRUE;
 
+    // VK_EXT_external_memory_host — lets the arena import the heap pool as a device buffer
+    // (Phase 3 whole-heap model). Detect the extension and its import alignment.
+    uint32_t ext_count = 0;
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &ext_count, nullptr);
+    std::vector<VkExtensionProperties> exts(ext_count);
+    vkEnumerateDeviceExtensionProperties(physical_device_, nullptr, &ext_count, exts.data());
+    for (const auto& e : exts) {
+        if (std::string(e.extensionName) == "VK_EXT_external_memory_host") {
+            capabilities_.external_memory_host = true;
+            break;
+        }
+    }
+    if (capabilities_.external_memory_host) {
+        VkPhysicalDeviceExternalMemoryHostPropertiesEXT emh{};
+        emh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT;
+        VkPhysicalDeviceProperties2 p2{};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &emh;
+        vkGetPhysicalDeviceProperties2(physical_device_, &p2);
+        capabilities_.min_imported_host_pointer_alignment =
+            emh.minImportedHostPointerAlignment ? emh.minImportedHostPointerAlignment : 4096;
+    }
+
     std::cout << "[Parallax] Device capabilities: int64=" << capabilities_.shader_int64
               << " float64=" << capabilities_.shader_float64
-              << " buffer_device_address=" << capabilities_.buffer_device_address << std::endl;
+              << " buffer_device_address=" << capabilities_.buffer_device_address
+              << " external_memory_host=" << capabilities_.external_memory_host
+              << " (import_align=" << capabilities_.min_imported_host_pointer_alignment << ")"
+              << std::endl;
 }
 
 #ifdef PARALLAX_ENABLE_VALIDATION

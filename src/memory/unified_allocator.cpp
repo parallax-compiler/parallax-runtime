@@ -61,7 +61,13 @@ UnifiedArena* get_global_arena() {
 
     g_arena_initializing = true;
     auto arena = std::make_unique<UnifiedArena>();
-    if (!arena->initialize(g_backend.get())) {
+    // Phase 3: prefer adopting the whole heap pool as the device buffer (so every heap
+    // pointer is GPU-addressable with no copy). Falls back to the legacy per-arena buffer
+    // when VK_EXT_external_memory_host is absent or the import fails, or when forced.
+    const bool force_legacy = std::getenv("PARALLAX_FORCE_LEGACY_ARENA") != nullptr;
+    bool ok = (!force_legacy && arena->initialize_from_pool(g_backend.get()));
+    if (!ok) ok = arena->initialize(g_backend.get());
+    if (!ok) {
         g_arena_initializing = false;
         return nullptr;
     }

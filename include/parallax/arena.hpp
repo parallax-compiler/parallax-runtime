@@ -40,6 +40,14 @@ public:
     // Create the arena (one buffer + one mapped allocation). Returns false on
     // any Vulkan failure; the object is left destroyed.
     bool initialize(VulkanBackend* backend, VkDeviceSize capacity = kDefaultCapacity);
+
+    // Phase 3 whole-heap adoption: import the process-wide heap pool (heap_pool.cpp) as
+    // ONE device buffer via VK_EXT_external_memory_host, so every heap pointer is
+    // GPU-addressable with no copy. allocate/deallocate/contains/offset_of then delegate
+    // to the pool. Returns false if the device lacks the extension or the import fails
+    // (the caller then falls back to initialize()). host memory is coherent, so uma()==true.
+    bool initialize_from_pool(VulkanBackend* backend);
+
     void destroy();
 
     // Sub-allocate `size` bytes, aligned to max(align, kDefaultAlignment).
@@ -91,6 +99,7 @@ private:
     // Discrete-GPU staging (only allocated when the device buffer is NOT host-visible,
     // or when PARALLAX_FORCE_STAGING forces this path to exercise it on UMA hardware).
     bool            uma_ = true;                     // device memory is host-visible
+    bool            pool_backed_ = false;             // arena imported the heap pool (Phase 3)
     VkBuffer        staging_buffer_ = VK_NULL_HANDLE;
     VkDeviceMemory  staging_memory_ = VK_NULL_HANDLE;
     VkCommandPool   xfer_pool_ = VK_NULL_HANDLE;
