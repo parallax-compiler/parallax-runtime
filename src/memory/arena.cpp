@@ -187,7 +187,10 @@ bool UnifiedArena::initialize_from_pool(VulkanBackend* backend) {
     const DeviceCapabilities& caps = backend_->capabilities();
     if (!caps.external_memory_host) return false;
 
-    if (!px_pool_init()) return false;
+    // Adopt the pool ONLY if it is already live — i.e. the program linked the heap-capture
+    // shim (parallax-heap), which initializes the pool on its first allocation. We do NOT
+    // px_pool_init() here: a program that didn't opt into whole-heap capture keeps the
+    // legacy per-arena buffer and behaves exactly as before (zero blast radius).
     void* base = px_pool_base();
     size_t res = px_pool_reservation();
     if (!base || res == 0) return false;
