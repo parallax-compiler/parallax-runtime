@@ -255,7 +255,10 @@ uint32_t MemoryManager::find_memory_type(uint32_t type_filter, VkMemoryPropertyF
     }
     
     std::cerr << "Failed to find suitable memory type" << std::endl;
-    return 0;
+    // UINT32_MAX (not 0) on failure: memory type 0 may not match the filter, so returning
+    // it would silently allocate the WRONG type. UINT32_MAX makes vkAllocateMemory fail
+    // cleanly at the call site instead (matches UnifiedArena::find_memory_type).
+    return UINT32_MAX;
 }
 
 
