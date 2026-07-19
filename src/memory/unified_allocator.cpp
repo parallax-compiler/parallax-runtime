@@ -83,7 +83,12 @@ extern "C" {
 // C accessors used by the opt-in allocation-interposition library (Phase 1d).
 void* parallax_arena_alloc(size_t size, size_t align) {
     auto* arena = parallax::get_global_arena();
-    return arena ? arena->allocate(size, align ? align : 16) : nullptr;
+    void* p = arena ? arena->allocate(size, align ? align : 16) : nullptr;
+    // The funnels' staging path calls this; the zero-copy fast path does NOT. The marker
+    // lets gates confirm staging was skipped for pool-resident data.
+    static const bool dbg = std::getenv("PARALLAX_DEBUG") != nullptr;
+    if (dbg) std::cerr << "[parallax_arena_alloc] staging " << size << " bytes -> " << p << std::endl;
+    return p;
 }
 
 void parallax_arena_free(void* ptr) {

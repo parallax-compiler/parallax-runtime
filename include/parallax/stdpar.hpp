@@ -47,10 +47,21 @@ template <class T, class F>
 __attribute__((noinline)) void device_invoke(T* data, std::size_t n, F f) {
     static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
     if (k) {
-        // Stage the data through the unified arena (host-mapped, GPU-addressable):
-        // copy in, launch zero-copy on the arena buffer, copy back. This is the
-        // software-UM path that is correct on both UMA and discrete GPUs; a later
-        // optimization can bind arena-backed containers zero-copy to skip the copies.
+        // Zero-copy fast path (whole-heap model): when the data already lives in the
+        // unified arena / heap pool (a captured std::vector), the launcher binds it
+        // directly and the kernel writes IN PLACE — no staging copy at all.
+        if (parallax_arena_contains(data)) {
+            if constexpr (std::is_empty_v<F>) {
+                parallax_kernel_launch(k, data, n, sizeof(T));
+            } else {
+                parallax_kernel_launch_with_captures(k, data, n,
+                                                     static_cast<void*>(&f), sizeof(F),
+                                                     sizeof(T));
+            }
+            return;
+        }
+        // Staging path: non-pool data (stack/static arrays, or a heap allocation made
+        // before the pool existed) is copied through the arena. Correct on UMA + discrete.
         void* ab = parallax_arena_alloc(n * sizeof(T), alignof(T));
         if (ab) {
             std::memcpy(ab, data, n * sizeof(T));
@@ -78,18 +89,27 @@ template <class Tin, class Tout, class F>
 __attribute__((noinline)) void device_transform(const Tin* in, Tout* out, std::size_t n, F f) {
     static parallax_kernel_t k = parallax_kernel_lookup(__PRETTY_FUNCTION__);
     if (k) {
+        auto launch2 = [&](void* ib, void* ob) {
+            if constexpr (std::is_empty_v<F>) {
+                parallax_kernel_launch_transform2(k, ib, ob, n, sizeof(Tin), sizeof(Tout));
+            } else {
+                // Capturing transform op: bind the closure bytes as the uniform@2 block
+                // (the kernel reads its captures there, exactly like a for_each capture).
+                parallax_kernel_launch_transform2_captures(k, ib, ob, n, sizeof(Tin), sizeof(Tout),
+                                                           static_cast<void*>(&f), sizeof(F));
+            }
+        };
+        // Zero-copy fast path: both input and output already live in the pool (captured
+        // vectors) -> bind directly, kernel writes the output in place, no staging copies.
+        if (parallax_arena_contains(in) && parallax_arena_contains(out)) {
+            launch2(const_cast<Tin*>(in), out);
+            return;
+        }
         void* ai = parallax_arena_alloc(n * sizeof(Tin), alignof(Tin));
         void* ao = parallax_arena_alloc(n * sizeof(Tout), alignof(Tout));
         if (ai && ao) {
             std::memcpy(ai, in, n * sizeof(Tin));
-            if constexpr (std::is_empty_v<F>) {
-                parallax_kernel_launch_transform2(k, ai, ao, n, sizeof(Tin), sizeof(Tout));
-            } else {
-                // Capturing transform op: bind the closure bytes as the uniform@2 block
-                // (the kernel reads its captures there, exactly like a for_each capture).
-                parallax_kernel_launch_transform2_captures(k, ai, ao, n, sizeof(Tin), sizeof(Tout),
-                                                           static_cast<void*>(&f), sizeof(F));
-            }
+            launch2(ai, ao);
             std::memcpy(out, ao, n * sizeof(Tout));
             parallax_arena_free(ao);
             parallax_arena_free(ai);
