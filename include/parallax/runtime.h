@@ -23,6 +23,12 @@ void* parallax_arena_alloc(size_t size, size_t align);
 void parallax_arena_free(void* ptr);
 int parallax_arena_contains(const void* ptr);
 
+/* Whole-heap capture (Phase 2). 1 iff `ptr` lives in the process-wide heap pool that the
+ * parallax-heap link-time shim routes all allocations into (so it is arena-importable /
+ * GPU-addressable). 0 if the pool is not in use. Defined in the heap-capture shim; also
+ * available from the runtime for code that only wants the query. */
+int parallax_heap_contains(const void* ptr);
+
 /* Kernel execution */
 parallax_kernel_t parallax_kernel_load(const unsigned int* spirv, size_t words);
 void parallax_kernel_launch(parallax_kernel_t kernel, ...);

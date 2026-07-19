@@ -17,6 +17,7 @@ set(RUNTIME_SOURCES
     src/memory/unified_allocator.cpp
     src/memory/unified_buffer.cpp
     src/memory/arena.cpp
+    src/memory/heap_pool.cpp
     src/kernel/cache.cpp
     src/kernel/kernel_launcher.cpp
     src/backend/vulkan/device.cpp
@@ -60,9 +61,20 @@ install(DIRECTORY include/parallax
     DESTINATION include
 )
 
-# Opt-in allocation interposition (Phase 1d). Link this to route C++ heap
-# allocations through the unified-memory arena.
+# Opt-in allocation interposition (Phase 1d, DEPRECATED — superseded by parallax-heap).
+# Link this to route C++ heap allocations through the unified-memory arena.
 add_library(parallax-interpose SHARED src/memory/interpose.cpp)
 target_link_libraries(parallax-interpose PUBLIC parallax-runtime)
 install(TARGETS parallax-interpose LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+
+# Phase 2 whole-heap capture (nvc++-style). A STATIC library the compiler wrapper links
+# into the program: its strong operator new / malloc-family overrides route every
+# allocation into the heap pool (px_pool_*, which live in parallax-runtime), so all heap
+# data is arena-importable and GPU-addressable. Static so the strong symbols win at the
+# program's final link; px_pool_* resolve from the runtime shared lib.
+add_library(parallax-heap STATIC src/memory/heap_capture.cpp)
+target_include_directories(parallax-heap PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+install(TARGETS parallax-heap ARCHIVE DESTINATION lib)
 
