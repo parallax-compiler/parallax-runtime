@@ -1,4 +1,6 @@
 # Unit tests
+find_package(Threads REQUIRED)   # test_heap runs a multi-threaded allocator stress
+
 add_executable(test_vulkan_backend
     unit/test_vulkan_backend.cpp
 )
@@ -15,10 +17,10 @@ add_executable(test_arena unit/test_arena.cpp)
 target_link_libraries(test_arena PRIVATE parallax-runtime)
 add_test(NAME UnifiedArena COMMAND test_arena)
 
-# Allocation interposition (operator new -> arena)
-add_executable(test_interpose unit/test_interpose.cpp)
-target_link_libraries(test_interpose PRIVATE parallax-interpose parallax-runtime)
-add_test(NAME Interpose COMMAND test_interpose)
+# Whole-heap pool + link-time capture (Phase 2/4C, supersedes the old interpose test).
+add_executable(test_heap unit/test_heap.cpp)
+target_link_libraries(test_heap PRIVATE parallax-heap parallax-runtime Threads::Threads)
+add_test(NAME HeapPool COMMAND test_heap)
 
 # Phase 2: buffer_device_address pointer relocation. Requires a GLSL->SPIR-V
 # compiler to build the buffer_reference shader; skipped if not present.

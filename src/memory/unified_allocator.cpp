@@ -3,6 +3,7 @@
 #include "parallax/unified_buffer.hpp"
 #include "parallax/vulkan_backend.hpp"
 #include "parallax/arena.hpp"
+#include "parallax/heap_pool.hpp"
 #include <cstdlib>
 #include <memory>
 #include <iostream>
@@ -106,17 +107,17 @@ int parallax_arena_contains(const void* ptr) {
 using namespace parallax;
 
 void* parallax_umalloc(size_t size, unsigned flags) {
-    if (ensure_initialized() && g_memory_manager) {
-        return g_memory_manager->allocate(size);
-    }
-    // CPU fallback - standard malloc
-    return std::malloc(size);
+    (void)flags;
+    // Route into the whole-heap pool (Vulkan-free, lazily mmap'd). This unifies memory:
+    // parallax::allocator-backed containers now land in the same pool as the captured heap,
+    // so the arena imports them as the device buffer and launches bind them zero-copy —
+    // replacing the old per-allocation MemoryManager VkBuffer + register/copy path.
+    void* p = px_pool_alloc(size ? size : 1, 16);
+    return p ? p : std::malloc(size);  // pool unavailable/exhausted -> system heap
 }
 
 void parallax_ufree(void* ptr) {
-    if (g_memory_manager) {
-        g_memory_manager->deallocate(ptr);
-    } else {
-        std::free(ptr);
-    }
+    if (!ptr) return;
+    if (px_pool_contains(ptr)) px_pool_free(ptr);
+    else                       std::free(ptr);
 }

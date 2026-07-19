@@ -61,11 +61,9 @@ install(DIRECTORY include/parallax
     DESTINATION include
 )
 
-# Opt-in allocation interposition (Phase 1d, DEPRECATED — superseded by parallax-heap).
-# Link this to route C++ heap allocations through the unified-memory arena.
-add_library(parallax-interpose SHARED src/memory/interpose.cpp)
-target_link_libraries(parallax-interpose PUBLIC parallax-runtime)
-install(TARGETS parallax-interpose LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+# (The old opt-in parallax-interpose SHARED lib — operator-new-only, link-order dependent,
+# stranded pre-init allocations — has been removed. parallax-heap below supersedes it:
+# strong operator new + full malloc family, routed into the Vulkan-free heap pool.)
 
 # Phase 2 whole-heap capture (nvc++-style). A STATIC library the compiler wrapper links
 # into the program: its strong operator new / malloc-family overrides route every
