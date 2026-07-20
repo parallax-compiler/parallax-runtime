@@ -108,16 +108,20 @@ using namespace parallax;
 
 void* parallax_umalloc(size_t size, unsigned flags) {
     (void)flags;
-    // Route into the whole-heap pool (Vulkan-free, lazily mmap'd). This unifies memory:
-    // parallax::allocator-backed containers now land in the same pool as the captured heap,
-    // so the arena imports them as the device buffer and launches bind them zero-copy —
-    // replacing the old per-allocation MemoryManager VkBuffer + register/copy path.
-    void* p = px_pool_alloc(size ? size : 1, 16);
-    return p ? p : std::malloc(size);  // pool unavailable/exhausted -> system heap
+    // NOTE: converging parallax::allocator onto the heap pool (px_pool_alloc) is the goal,
+    // but it exposed a zero-copy bug for 8-byte elements in the collector launch path (int64
+    // for_each lost its write). Kept on the MemoryManager path until that's fixed; the
+    // FUNNEL path already uses the pool via parallax-heap. See parallax-nvcpp-parity memory.
+    if (ensure_initialized() && g_memory_manager) {
+        return g_memory_manager->allocate(size);
+    }
+    return std::malloc(size);
 }
 
 void parallax_ufree(void* ptr) {
-    if (!ptr) return;
-    if (px_pool_contains(ptr)) px_pool_free(ptr);
-    else                       std::free(ptr);
+    if (g_memory_manager) {
+        g_memory_manager->deallocate(ptr);
+    } else {
+        std::free(ptr);
+    }
 }
