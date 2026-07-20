@@ -298,11 +298,14 @@ void VulkanBackend::detect_capabilities() {
             emh.minImportedHostPointerAlignment ? emh.minImportedHostPointerAlignment : 4096;
     }
 
+    VkPhysicalDeviceProperties devprops;
+    vkGetPhysicalDeviceProperties(physical_device_, &devprops);
     std::cout << "[Parallax] Device capabilities: int64=" << capabilities_.shader_int64
               << " float64=" << capabilities_.shader_float64
               << " buffer_device_address=" << capabilities_.buffer_device_address
               << " external_memory_host=" << capabilities_.external_memory_host
-              << " (import_align=" << capabilities_.min_imported_host_pointer_alignment << ")"
+              << " (import_align=" << capabilities_.min_imported_host_pointer_alignment
+              << ") minSSBOoffsetAlign=" << devprops.limits.minStorageBufferOffsetAlignment
               << std::endl;
 }
 
