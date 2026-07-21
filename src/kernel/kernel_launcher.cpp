@@ -695,10 +695,11 @@ bool KernelLauncher::launch_with_captures(
         // for {T* data, size_t size} pairs and bound them at binding 1 has been removed. It
         // guessed pointer/size fields with magic thresholds and a hardcoded element-size,
         // which could bind the wrong buffer or misread a scalar capture's bytes as a pointer
-        // — a silent-wrong-result hazard. The compiler now bails a lambda that captures a
-        // pointer to the CPU (until in-kernel capture relocation lands), so no capturing
-        // kernel that reaches here needs a binding-1 buffer; captures are the opaque uniform@2
-        // block below (scalar / by-value POD struct captures, which are what actually work).
+        // — a silent-wrong-result hazard. The compiler now carries a captured POINTER in the
+        // uniform@2 block as a uint64 host address and RELOCATES it in-kernel (gpu = dev_base
+        // + p - host_base, via PhysicalStorageBuffer), exactly like element pointer-chasing —
+        // so no capturing kernel needs a binding-1 buffer. The captures block below is the
+        // opaque memcpy'd closure (pointers-as-u64, scalars, and by-value POD structs).
 
         // Prepare descriptor writes
         std::vector<VkWriteDescriptorSet> writes;
