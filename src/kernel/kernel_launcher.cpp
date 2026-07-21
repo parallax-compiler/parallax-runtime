@@ -691,76 +691,14 @@ bool KernelLauncher::launch_with_captures(
             return false;
         }
 
-        // Find decomposed vector pointers in captures struct
-        // Heuristic: Decomposed vectors are stored as {T* data, size_t size} pairs
-        // Look for pointer + size_t patterns, or standalone pointers
-        std::vector<void*> captured_buffers;
-        if (captures != nullptr && capture_size >= sizeof(void*)) {
-            const size_t num_fields = capture_size / sizeof(void*);
-            void** ptr_array = static_cast<void**>(captures);
-
-            std::cout << "[KernelLauncher] Analyzing captures struct: size=" << capture_size
-                      << " bytes, num_fields=" << num_fields << std::endl;
-
-            for (size_t i = 0; i < num_fields; ++i) {
-                void* potential_ptr = ptr_array[i];
-
-                // Check if there's a next field that could be a size
-                size_t potential_size = 0;
-                if (i + 1 < num_fields) {
-                    potential_size = reinterpret_cast<size_t*>(ptr_array)[i + 1];
-                }
-
-                std::cout << "[KernelLauncher]   Field " << i << ": ptr=" << potential_ptr;
-                if (i + 1 < num_fields) {
-                    std::cout << ", next_value=" << potential_size;
-                }
-                std::cout << std::endl;
-
-                // Check if this looks like a decomposed vector: pointer + reasonable size
-                if (potential_ptr != nullptr && i + 1 < num_fields && potential_size > 0 && potential_size < 1000000000) {
-                    VkBuffer test_buffer = memory_manager_->get_buffer(potential_ptr);
-
-                    std::cout << "[KernelLauncher]   Looks like decomposed vector. VkBuffer="
-                              << (void*)test_buffer << std::endl;
-
-                    // If not registered, try to register it
-                    if (test_buffer == VK_NULL_HANDLE) {
-                        std::cout << "[KernelLauncher] Auto-registering captured buffer at offset "
-                                  << (i * sizeof(void*)) << ", size=" << potential_size << " elements" << std::endl;
-
-                        // Estimate element size - assume float or struct (try common sizes)
-                        // For now, assume the size field is in elements, and element is at least 4 bytes
-                        size_t byte_size = potential_size;
-                        if (potential_size < 1000000) {  // Likely in elements, not bytes
-                            byte_size = potential_size * sizeof(float) * 4;  // Assume Body-like struct (~28 bytes)
-                        }
-
-                        memory_manager_->register_external_buffer(potential_ptr, byte_size);
-                        test_buffer = memory_manager_->get_buffer(potential_ptr);
-
-                        std::cout << "[KernelLauncher] After registration: VkBuffer="
-                                  << (void*)test_buffer << std::endl;
-                    }
-
-                    if (test_buffer != VK_NULL_HANDLE) {
-                        captured_buffers.push_back(potential_ptr);
-                        std::cout << "[KernelLauncher] Found captured buffer pointer at offset "
-                                  << (i * sizeof(void*)) << std::endl;
-                        i++;  // Skip the size field
-                    }
-                }
-                // Fallback: check if this is just a standalone buffer pointer (not a vector decomposition)
-                else if (potential_ptr != nullptr) {
-                    VkBuffer test_buffer = memory_manager_->get_buffer(potential_ptr);
-                    if (test_buffer != VK_NULL_HANDLE) {
-                        captured_buffers.push_back(potential_ptr);
-                        std::cout << "[KernelLauncher] Found standalone captured buffer pointer at offset "
-                                  << (i * sizeof(void*)) << std::endl;
-                    }
-                }
-            }
-        }
+        // NOTE: the old "decomposed vector" heuristic that byte-scanned the capture struct
+        // for {T* data, size_t size} pairs and bound them at binding 1 has been removed. It
+        // guessed pointer/size fields with magic thresholds and a hardcoded element-size,
+        // which could bind the wrong buffer or misread a scalar capture's bytes as a pointer
+        // — a silent-wrong-result hazard. The compiler now bails a lambda that captures a
+        // pointer to the CPU (until in-kernel capture relocation lands), so no capturing
+        // kernel that reaches here needs a binding-1 buffer; captures are the opaque uniform@2
+        // block below (scalar / by-value POD struct captures, which are what actually work).
 
         // Prepare descriptor writes
         std::vector<VkWriteDescriptorSet> writes;
@@ -783,23 +721,7 @@ bool KernelLauncher::launch_with_captures(
         write0.pBufferInfo = &buffer_infos[0];
         writes.push_back(write0);
 
-        // Binding 1: Captured buffer (storage buffer) - if any
-        if (!captured_buffers.empty()) {
-            VkBuffer captured_vk_buffer = memory_manager_->get_buffer(captured_buffers[0]);
-            buffer_infos.push_back({captured_vk_buffer, 0, VK_WHOLE_SIZE});
-
-            VkWriteDescriptorSet write1{};
-            write1.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write1.dstSet = descriptor_set;
-            write1.dstBinding = 1;
-            write1.dstArrayElement = 0;
-            write1.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            write1.descriptorCount = 1;
-            write1.pBufferInfo = &buffer_infos[1];
-            writes.push_back(write1);
-
-            std::cout << "[KernelLauncher] Binding captured buffer to binding 1" << std::endl;
-        }
+        // (Binding 1 for a captured buffer is no longer written — see the note above.)
 
         // Binding 2: Captures uniform buffer
         VkBuffer captures_uniform_buffer = VK_NULL_HANDLE;
