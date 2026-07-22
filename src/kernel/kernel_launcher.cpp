@@ -999,10 +999,6 @@ bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::stri
     if (!arena || !arena->valid()) { std::cerr << "[scan] requires arena" << std::endl; return false; }
 
     const uint32_t num_blocks = static_cast<uint32_t>((count + 255) / 256);
-    if (num_blocks > 256) {
-        std::cerr << "[scan] count exceeds the single-level block-sum limit (256*256)" << std::endl;
-        return false;
-    }
 
     // Resolve the in-place data buffer (arena zero-copy, else register + upload).
     const bool data_in_arena = arena->contains(data);
@@ -1019,8 +1015,7 @@ bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::stri
     }
 
     void* blocksums = arena->allocate(num_blocks * elem_size, 256);
-    void* dummy = arena->allocate(elem_size, 256);
-    if (!blocksums || !dummy) { std::cerr << "[scan] scratch alloc failed" << std::endl; return false; }
+    if (!blocksums) { std::cerr << "[scan] scratch alloc failed" << std::endl; return false; }
     VkBuffer bs_buf = arena->buffer();
     VkDeviceSize bs_off = arena->offset_of(blocksums);
     VkDeviceSize bs_range = static_cast<VkDeviceSize>(num_blocks) * elem_size;
@@ -1032,11 +1027,14 @@ bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::stri
         return false;
 
     if (num_blocks > 1) {
-        // Pass 2: inclusive scan of the block sums (single workgroup, in place).
-        VkBuffer dm_buf = arena->buffer();
-        VkDeviceSize dm_off = arena->offset_of(dummy);
-        if (!dispatch_reduce_level(sit->second, bs_buf, bs_off, bs_range,
-                                   dm_buf, dm_off, elem_size, num_blocks, 1))
+        // Pass 2: inclusive-scan the block sums, then add each block's exclusive offset.
+        // The block-sums scan is itself an inclusive scan, so RECURSE (multi-level) rather
+        // than cap at one workgroup — this lifts the old 256*256 = 65536-element limit. The
+        // recursion strictly shrinks (num_blocks = ceil(count/256) < count for count >= 2)
+        // and bottoms out at a single workgroup once the sub-block count reaches 1. The
+        // nested launch_scan's ArenaSyncScope is reentrancy-guarded (no re-migrate), and
+        // blocksums is arena-resident so it resolves zero-copy.
+        if (!launch_scan(scan_kernel, add_kernel, blocksums, num_blocks, elem_size))
             return false;
         // Pass 3: add each block's exclusive offset (= scanned blocksums[wg-1]).
         if (!dispatch_reduce_level(ait->second, data_buf, data_off, data_range,
@@ -1047,7 +1045,6 @@ bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::stri
 
     if (!data_in_arena) memory_manager_->sync_after_kernel(data);  // download in-place result
     arena->deallocate(blocksums);
-    arena->deallocate(dummy);
     return true;
 }
 
