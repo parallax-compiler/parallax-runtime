@@ -24,6 +24,15 @@ struct DeviceCapabilities {
     bool shader_int64 = false;
     bool shader_float64 = false;
     bool buffer_device_address = false;
+    // Phase 7 element-type breadth: 8/16-bit ints + fp16 in shaders, and reading them
+    // from a storage buffer. Enabled only when detected so vkCreateDevice never asks for
+    // an unsupported feature; the compiler emits narrow-type kernels regardless and the
+    // kernel simply fails to load (CPU fallback) where the device lacks the feature.
+    bool shader_int16 = false;
+    bool shader_int8 = false;
+    bool shader_float16 = false;
+    bool storage_buffer_16bit = false;
+    bool storage_buffer_8bit = false;
     // VK_EXT_external_memory_host: import a host mmap region (the heap pool) as a device
     // buffer, so the whole captured heap is GPU-addressable with no copy (Phase 3).
     bool     external_memory_host = false;

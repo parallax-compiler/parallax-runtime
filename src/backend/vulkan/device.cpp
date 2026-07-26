@@ -207,13 +207,29 @@ bool VulkanBackend::create_logical_device() {
     VkPhysicalDeviceBufferDeviceAddressFeatures bda_features{};
     bda_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
     bda_features.bufferDeviceAddress = VK_TRUE;
-    if (capabilities_.buffer_device_address) {
-        vulkan11_features.pNext = &bda_features;
-    }
+
+    // Phase 7: enable the detected narrow-type features. Undetected fields stay VK_FALSE,
+    // so chaining these unconditionally never requests an unsupported feature. Order:
+    //   vulkan11 -> f16i8 -> s8 -> s16 -> [bda]
+    VkPhysicalDeviceShaderFloat16Int8Features f16i8_en{};
+    f16i8_en.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+    f16i8_en.shaderInt8 = capabilities_.shader_int8 ? VK_TRUE : VK_FALSE;
+    f16i8_en.shaderFloat16 = capabilities_.shader_float16 ? VK_TRUE : VK_FALSE;
+    VkPhysicalDevice8BitStorageFeatures s8_en{};
+    s8_en.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
+    s8_en.storageBuffer8BitAccess = capabilities_.storage_buffer_8bit ? VK_TRUE : VK_FALSE;
+    VkPhysicalDevice16BitStorageFeatures s16_en{};
+    s16_en.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+    s16_en.storageBuffer16BitAccess = capabilities_.storage_buffer_16bit ? VK_TRUE : VK_FALSE;
+    vulkan11_features.pNext = &f16i8_en;
+    f16i8_en.pNext = &s8_en;
+    s8_en.pNext = &s16_en;
+    s16_en.pNext = capabilities_.buffer_device_address ? static_cast<void*>(&bda_features) : nullptr;
 
     VkPhysicalDeviceFeatures device_features{};
     device_features.shaderInt64 = capabilities_.shader_int64 ? VK_TRUE : VK_FALSE;
     device_features.shaderFloat64 = capabilities_.shader_float64 ? VK_TRUE : VK_FALSE;
+    device_features.shaderInt16 = capabilities_.shader_int16 ? VK_TRUE : VK_FALSE;
     
     // Extensions for MoltenVK
     std::vector<const char*> device_extensions;
@@ -266,14 +282,33 @@ void VulkanBackend::detect_capabilities() {
     vkGetPhysicalDeviceFeatures(physical_device_, &feats);
     capabilities_.shader_int64 = feats.shaderInt64 == VK_TRUE;
     capabilities_.shader_float64 = feats.shaderFloat64 == VK_TRUE;
+    capabilities_.shader_int16 = feats.shaderInt16 == VK_TRUE;  // base feature (Phase 7)
 
     VkPhysicalDeviceBufferDeviceAddressFeatures bda{};
     bda.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    // Phase 7: shaderInt8/shaderFloat16 (VK_KHR_shader_float16_int8) + narrow storage-buffer
+    // access (VK_KHR_8bit/16bit_storage). Chain them into the same feature-2 query.
+    VkPhysicalDeviceShaderFloat16Int8Features f16i8{};
+    f16i8.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+    VkPhysicalDevice8BitStorageFeatures s8{};
+    s8.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
+    VkPhysicalDevice16BitStorageFeatures s16{};
+    s16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+    bda.pNext = &f16i8; f16i8.pNext = &s8; s8.pNext = &s16;
     VkPhysicalDeviceFeatures2 f2{};
     f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     f2.pNext = &bda;
     vkGetPhysicalDeviceFeatures2(physical_device_, &f2);
     capabilities_.buffer_device_address = bda.bufferDeviceAddress == VK_TRUE;
+    capabilities_.shader_int8 = f16i8.shaderInt8 == VK_TRUE;
+    capabilities_.shader_float16 = f16i8.shaderFloat16 == VK_TRUE;
+    capabilities_.storage_buffer_16bit = s16.storageBuffer16BitAccess == VK_TRUE;
+    capabilities_.storage_buffer_8bit = s8.storageBuffer8BitAccess == VK_TRUE;
+    std::cerr << "[parallax caps] int16=" << capabilities_.shader_int16
+              << " int8=" << capabilities_.shader_int8
+              << " float16=" << capabilities_.shader_float16
+              << " sb16=" << capabilities_.storage_buffer_16bit
+              << " sb8=" << capabilities_.storage_buffer_8bit << std::endl;
 
     // VK_EXT_external_memory_host — lets the arena import the heap pool as a device buffer
     // (Phase 3 whole-heap model). Detect the extension and its import alignment.
