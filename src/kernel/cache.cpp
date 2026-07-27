@@ -292,6 +292,17 @@ void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
     }
 }
 
+size_t parallax_argminmax(parallax_kernel_t kernel, void* data, size_t count,
+                          size_t elem_size, int is_float, int want_max) {
+    if (!kernel || !g_kernel_launcher) {
+        std::cerr << "[parallax_argminmax] Invalid kernel or launcher not initialized" << std::endl;
+        return count;
+    }
+    auto* handle = reinterpret_cast<KernelHandle*>(kernel);
+    return g_kernel_launcher->launch_argminmax(handle->name, data, count, elem_size,
+                                               is_float != 0, want_max != 0);
+}
+
 void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
                    void* data, size_t count, size_t elem_size) {
     if (!scan_kernel || !add_kernel || !g_kernel_launcher) {

@@ -52,6 +52,13 @@ void parallax_kernel_launch_transform2_captures(parallax_kernel_t kernel, void* 
 void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
                      size_t elem_size, void* result);
 
+/* Arg-min / arg-max (Phase 8): min/max/minmax_element and the find family. Runs the
+ * block-level argmax kernel and combines the per-block winners on the host. Returns the
+ * index of the first extremum (min when want_max==0, max otherwise), or `count` if empty.
+ * is_float selects the host value comparison (with elem_size). */
+size_t parallax_argminmax(parallax_kernel_t kernel, void* data, size_t count,
+                          size_t elem_size, int is_float, int want_max);
+
 /* Inclusive prefix scan (Phase 5). Scans `data` in place using two kernels: a
  * per-block scan and an add-block-offsets pass. */
 void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,

@@ -984,6 +984,119 @@ bool KernelLauncher::launch_reduce(const std::string& kernel_name, void* data, s
     return true;
 }
 
+size_t KernelLauncher::launch_argminmax(const std::string& kernel_name, void* data, size_t count,
+                                        size_t elem_size, bool is_float, bool want_max) {
+    ArenaSyncScope __arena_sync;
+    auto it = pipelines_.find(kernel_name);
+    if (it == pipelines_.end()) { std::cerr << "Kernel not found: " << kernel_name << std::endl; return count; }
+    auto& pd = it->second;
+    if (count == 0) return 0;
+    if (count == 1) return 0;
+
+    UnifiedArena* arena = get_global_arena();
+    if (!arena || !arena->valid()) { std::cerr << "[argmm] requires arena" << std::endl; return count; }
+
+    const uint32_t groups = static_cast<uint32_t>((count + 255) / 256);
+
+    // Resolve data@0 (arena zero-copy, else register + upload).
+    VkBuffer data_buf; VkDeviceSize data_off; VkDeviceSize data_range = count * elem_size;
+    if (arena->contains(data)) { data_buf = arena->buffer(); data_off = arena->offset_of(data); }
+    else {
+        VkBuffer reg = memory_manager_->get_buffer(data);
+        if (reg == VK_NULL_HANDLE) { memory_manager_->register_external_buffer(data, data_range); reg = memory_manager_->get_buffer(data); }
+        if (reg == VK_NULL_HANDLE) { std::cerr << "[argmm] bad data buffer" << std::endl; return count; }
+        memory_manager_->sync_before_kernel(data);
+        data_buf = reg; data_off = 0; data_range = VK_WHOLE_SIZE;
+    }
+
+    // Per-block winner scratch: values@1 (elem) + indices@3 (uint), arena-resident.
+    void* vals = arena->allocate(groups * elem_size, 256);
+    void* idxs = arena->allocate(groups * sizeof(uint32_t), 256);
+    if (!vals || !idxs) { std::cerr << "[argmm] scratch alloc failed" << std::endl; return count; }
+    VkDeviceSize vals_off = arena->offset_of(vals), idxs_off = arena->offset_of(idxs);
+
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = descriptor_pool_; ai.descriptorSetCount = 1; ai.pSetLayouts = &pd.descriptor_set_layout;
+    VkDescriptorSet dset;
+    if (vkAllocateDescriptorSets(backend_->device(), &ai, &dset) != VK_SUCCESS) {
+        std::cerr << "[argmm] descriptor alloc failed" << std::endl; return count;
+    }
+    // A dummy uniform for the shared layout's binding 2 (unused by this kernel).
+    VkBuffer ub = VK_NULL_HANDLE; VkDeviceMemory um = VK_NULL_HANDLE;
+    VkBufferCreateInfo ubi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    ubi.size = 64; ubi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT; ubi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(backend_->device(), &ubi, nullptr, &ub);
+    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(backend_->device(), ub, &mr);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = memory_manager_->find_memory_type(mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(backend_->device(), &mai, nullptr, &um);
+    vkBindBufferMemory(backend_->device(), ub, um, 0);
+    transient_buffers_.emplace_back(ub, um);
+
+    VkDescriptorBufferInfo bi[4];
+    bi[0] = {data_buf, data_off, data_range};
+    bi[1] = {arena->buffer(), vals_off, static_cast<VkDeviceSize>(groups) * elem_size};
+    bi[2] = {ub, 0, VK_WHOLE_SIZE};
+    bi[3] = {arena->buffer(), idxs_off, static_cast<VkDeviceSize>(groups) * sizeof(uint32_t)};
+    VkWriteDescriptorSet w[4]{};
+    const VkDescriptorType types[4] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                       VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    for (int i = 0; i < 4; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[i].dstSet = dset; w[i].dstBinding = i;
+        w[i].descriptorType = types[i]; w[i].descriptorCount = 1; w[i].pBufferInfo = &bi[i];
+    }
+    vkUpdateDescriptorSets(backend_->device(), 4, w, 0, nullptr);
+
+    sync();
+    vkResetFences(backend_->device(), 1, &fence_);
+    vkResetCommandBuffer(command_buffer_, 0);
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(command_buffer_, &begin);
+    vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pd.pipeline);
+    vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pd.layout, 0, 1, &dset, 0, nullptr);
+    struct { uint32_t count; uint32_t want_max; } push{static_cast<uint32_t>(count), want_max ? 1u : 0u};
+    vkCmdPushConstants(command_buffer_, pd.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+    vkCmdDispatch(command_buffer_, groups, 1, 1);
+    vkEndCommandBuffer(command_buffer_);
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1; si.pCommandBuffers = &command_buffer_;
+    if (vkQueueSubmit(backend_->compute_queue(), 1, &si, fence_) != VK_SUCCESS) {
+        std::cerr << "[argmm] submit failed" << std::endl; return count;
+    }
+    fence_signaled_ = false; sync();
+    arena->invalidate_from_device();  // make vals/idxs host-visible (no-op on UMA)
+
+    // Host combine over the `groups` per-block winners. Compare values by type; ties ->
+    // smaller index (the kernel already broke intra-block ties toward the smaller index).
+    const uint32_t* idx_arr = static_cast<const uint32_t*>(idxs);
+    const char* vbytes = static_cast<const char*>(vals);
+    auto as_dbl = [&](const char* p) -> double {
+        if (is_float) return elem_size == 8 ? *reinterpret_cast<const double*>(p)
+                          : elem_size == 4 ? *reinterpret_cast<const float*>(p)
+                                           : static_cast<double>(*reinterpret_cast<const _Float16*>(p));
+        switch (elem_size) { case 1: return *reinterpret_cast<const int8_t*>(p);
+                             case 2: return *reinterpret_cast<const int16_t*>(p);
+                             case 8: return static_cast<double>(*reinterpret_cast<const int64_t*>(p));
+                             default: return *reinterpret_cast<const int32_t*>(p); }
+    };
+    size_t best_idx = count; double best_val = 0;
+    for (uint32_t b = 0; b < groups; ++b) {
+        size_t cand = idx_arr[b];
+        if (cand >= count) continue;  // empty/partial block winner is invalid
+        double v = as_dbl(vbytes + static_cast<size_t>(b) * elem_size);
+        bool better = (best_idx == count) ||
+                      (want_max ? (v > best_val) : (v < best_val)) ||
+                      (v == best_val && cand < best_idx);
+        if (better) { best_idx = cand; best_val = v; }
+    }
+    arena->deallocate(vals);
+    arena->deallocate(idxs);
+    return best_idx == count ? 0 : best_idx;
+}
+
 bool KernelLauncher::launch_scan(const std::string& scan_kernel, const std::string& add_kernel,
                                  void* data, size_t count, size_t elem_size) {
     ArenaSyncScope __arena_sync;  // migrate host<->device around this operation (no-op on UMA)

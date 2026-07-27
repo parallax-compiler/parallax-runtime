@@ -61,6 +61,13 @@ public:
     bool launch_reduce(const std::string& kernel_name, void* data, size_t count,
                        size_t elem_size, void* out_result);
 
+    // Phase 8: arg-min / arg-max (min/max/minmax_element, find family). Dispatches the
+    // block-level argmax kernel (data@0, per-block winner value@1, index@3) then combines
+    // the few per-block winners on the host (ties -> smaller index). is_float + elem_size
+    // select the host value comparison. Returns the winning index, or count on empty.
+    size_t launch_argminmax(const std::string& kernel_name, void* data, size_t count,
+                            size_t elem_size, bool is_float, bool want_max);
+
     // Inclusive prefix scan (Phase 5). Scans `data` in place: per-block scan
     // (scan_kernel) writing block totals, scan of those totals, then add the
     // exclusive block offsets back (add_kernel). MVP: count <= 256*256 (the block
