@@ -68,6 +68,11 @@ public:
     size_t launch_argminmax(const std::string& kernel_name, void* data, size_t count,
                             size_t elem_size, bool is_float, bool want_max, bool want_last);
 
+    // Phase 8: find_if / find_if_not. Dispatches the predicate-find kernel (data@0, per-block
+    // min matching index@1) and returns the overall min -> the FIRST match, or `count` if none.
+    size_t launch_find(const std::string& kernel_name, void* data, size_t count,
+                       size_t elem_size, bool negate);
+
     // Inclusive prefix scan (Phase 5). Scans `data` in place: per-block scan
     // (scan_kernel) writing block totals, scan of those totals, then add the
     // exclusive block offsets back (add_kernel). MVP: count <= 256*256 (the block

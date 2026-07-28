@@ -59,6 +59,11 @@ void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
 size_t parallax_argminmax(parallax_kernel_t kernel, void* data, size_t count,
                           size_t elem_size, int is_float, int want_max, int want_last);
 
+/* find_if / find_if_not (Phase 8): runs the predicate-find kernel and returns the index of
+ * the FIRST element satisfying the predicate (negated when negate!=0), or `count` if none. */
+size_t parallax_find(parallax_kernel_t kernel, void* data, size_t count,
+                     size_t elem_size, int negate);
+
 /* Inclusive prefix scan (Phase 5). Scans `data` in place using two kernels: a
  * per-block scan and an add-block-offsets pass. */
 void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
