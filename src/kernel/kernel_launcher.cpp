@@ -985,7 +985,7 @@ bool KernelLauncher::launch_reduce(const std::string& kernel_name, void* data, s
 }
 
 size_t KernelLauncher::launch_argminmax(const std::string& kernel_name, void* data, size_t count,
-                                        size_t elem_size, bool is_float, bool want_max) {
+                                        size_t elem_size, bool is_float, bool want_max, bool want_last) {
     ArenaSyncScope __arena_sync;
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) { std::cerr << "Kernel not found: " << kernel_name << std::endl; return count; }
@@ -1057,7 +1057,8 @@ size_t KernelLauncher::launch_argminmax(const std::string& kernel_name, void* da
     vkBeginCommandBuffer(command_buffer_, &begin);
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pd.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pd.layout, 0, 1, &dset, 0, nullptr);
-    struct { uint32_t count; uint32_t want_max; } push{static_cast<uint32_t>(count), want_max ? 1u : 0u};
+    struct { uint32_t count; uint32_t want_max; uint32_t want_last; }
+        push{static_cast<uint32_t>(count), want_max ? 1u : 0u, want_last ? 1u : 0u};
     vkCmdPushConstants(command_buffer_, pd.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(command_buffer_, groups, 1, 1);
     vkEndCommandBuffer(command_buffer_);
@@ -1089,7 +1090,7 @@ size_t KernelLauncher::launch_argminmax(const std::string& kernel_name, void* da
         double v = as_dbl(vbytes + static_cast<size_t>(b) * elem_size);
         bool better = (best_idx == count) ||
                       (want_max ? (v > best_val) : (v < best_val)) ||
-                      (v == best_val && cand < best_idx);
+                      (v == best_val && (want_last ? cand > best_idx : cand < best_idx));
         if (better) { best_idx = cand; best_val = v; }
     }
     arena->deallocate(vals);

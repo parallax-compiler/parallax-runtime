@@ -66,7 +66,7 @@ public:
     // the few per-block winners on the host (ties -> smaller index). is_float + elem_size
     // select the host value comparison. Returns the winning index, or count on empty.
     size_t launch_argminmax(const std::string& kernel_name, void* data, size_t count,
-                            size_t elem_size, bool is_float, bool want_max);
+                            size_t elem_size, bool is_float, bool want_max, bool want_last);
 
     // Inclusive prefix scan (Phase 5). Scans `data` in place: per-block scan
     // (scan_kernel) writing block totals, scan of those totals, then add the

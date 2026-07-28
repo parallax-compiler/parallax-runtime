@@ -57,7 +57,7 @@ void parallax_reduce(parallax_kernel_t kernel, void* data, size_t count,
  * index of the first extremum (min when want_max==0, max otherwise), or `count` if empty.
  * is_float selects the host value comparison (with elem_size). */
 size_t parallax_argminmax(parallax_kernel_t kernel, void* data, size_t count,
-                          size_t elem_size, int is_float, int want_max);
+                          size_t elem_size, int is_float, int want_max, int want_last);
 
 /* Inclusive prefix scan (Phase 5). Scans `data` in place using two kernels: a
  * per-block scan and an add-block-offsets pass. */
