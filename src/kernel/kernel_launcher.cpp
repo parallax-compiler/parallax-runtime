@@ -1099,7 +1099,7 @@ size_t KernelLauncher::launch_argminmax(const std::string& kernel_name, void* da
 }
 
 size_t KernelLauncher::launch_find(const std::string& kernel_name, void* data, size_t count,
-                                   size_t elem_size, bool negate) {
+                                   size_t elem_size, bool negate, const void* value) {
     ArenaSyncScope __arena_sync;
     auto it = pipelines_.find(kernel_name);
     if (it == pipelines_.end()) { std::cerr << "Kernel not found: " << kernel_name << std::endl; return count; }
@@ -1164,7 +1164,10 @@ size_t KernelLauncher::launch_find(const std::string& kernel_name, void* data, s
     vkBeginCommandBuffer(command_buffer_, &begin);
     vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pd.pipeline);
     vkCmdBindDescriptorSets(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pd.layout, 0, 1, &dset, 0, nullptr);
-    struct { uint32_t count; uint32_t negate; } push{static_cast<uint32_t>(count), negate ? 1u : 0u};
+    // push { uint count@0, uint negate@4, elem value@8 } — value used only by find(value).
+    struct { uint32_t count; uint32_t negate; uint64_t value; }
+        push{static_cast<uint32_t>(count), negate ? 1u : 0u, 0};
+    if (value && elem_size <= 8) std::memcpy(&push.value, value, elem_size);
     vkCmdPushConstants(command_buffer_, pd.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
     vkCmdDispatch(command_buffer_, groups, 1, 1);
     vkEndCommandBuffer(command_buffer_);

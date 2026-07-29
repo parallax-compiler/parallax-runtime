@@ -304,13 +304,13 @@ size_t parallax_argminmax(parallax_kernel_t kernel, void* data, size_t count,
 }
 
 size_t parallax_find(parallax_kernel_t kernel, void* data, size_t count,
-                     size_t elem_size, int negate) {
+                     size_t elem_size, int negate, const void* value) {
     if (!kernel || !g_kernel_launcher) {
         std::cerr << "[parallax_find] Invalid kernel or launcher not initialized" << std::endl;
         return count;
     }
     auto* handle = reinterpret_cast<KernelHandle*>(kernel);
-    return g_kernel_launcher->launch_find(handle->name, data, count, elem_size, negate != 0);
+    return g_kernel_launcher->launch_find(handle->name, data, count, elem_size, negate != 0, value);
 }
 
 void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
