@@ -73,6 +73,12 @@ public:
     size_t launch_find(const std::string& kernel_name, void* data, size_t count,
                        size_t elem_size, bool negate, const void* value = nullptr);
 
+    // Phase 8: mismatch / equal. Dispatches the two-range mismatch kernel (a@0, b@3,
+    // per-block min mismatch index@1) and returns the first mismatch index, or `count`
+    // if the ranges are equal up to count.
+    size_t launch_mismatch(const std::string& kernel_name, void* a, void* b,
+                           size_t count, size_t elem_size);
+
     // Inclusive prefix scan (Phase 5). Scans `data` in place: per-block scan
     // (scan_kernel) writing block totals, scan of those totals, then add the
     // exclusive block offsets back (add_kernel). MVP: count <= 256*256 (the block

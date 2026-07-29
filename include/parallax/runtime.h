@@ -64,6 +64,9 @@ size_t parallax_argminmax(parallax_kernel_t kernel, void* data, size_t count,
 size_t parallax_find(parallax_kernel_t kernel, void* data, size_t count,
                      size_t elem_size, int negate, const void* value);
 
+/* mismatch / equal (Phase 8): first index where a[i] != b[i], or `count` if equal. */
+size_t parallax_mismatch(parallax_kernel_t kernel, void* a, void* b, size_t count, size_t elem_size);
+
 /* Inclusive prefix scan (Phase 5). Scans `data` in place using two kernels: a
  * per-block scan and an add-block-offsets pass. */
 void parallax_scan(parallax_kernel_t scan_kernel, parallax_kernel_t add_kernel,
