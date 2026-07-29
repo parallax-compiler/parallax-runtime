@@ -410,13 +410,21 @@ inline constexpr bool is_offload_policy_v =
 #endif
     ;
 
+// Phase 9: the device funnels read each range through &*first as a raw contiguous buffer,
+// so offload is only valid for contiguous iterators. Non-contiguous iterators (std::deque,
+// std::list, …) fall through to the serial std:: algorithm below. parallax::is_contiguous_
+// iterator_v (runtime.h) uses std::contiguous_iterator on C++20, raw-pointer-only pre-C++20.
+template <class Policy, class... Its>
+inline constexpr bool offload_ok_v =
+    is_offload_policy_v<Policy> && (parallax::is_contiguous_iterator_v<Its> && ...);
+
 } // namespace detail
 
 // ---- Algorithm surface (map skeleton) -------------------------------------
 
 template <class Policy, class It, class F>
 void for_each(Policy&&, It first, It last, F f) {
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         auto n = static_cast<std::size_t>(std::distance(first, last));
         if (n == 0) return;
         detail::device_invoke(&*first, n, f);
@@ -430,7 +438,7 @@ void for_each(Policy&&, It first, It last, F f) {
 template <class Policy, class InIt, class OutIt, class F>
 OutIt transform(Policy&&, InIt first, InIt last, OutIt d_first, F f) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, InIt, OutIt>) {
         if (n) detail::device_transform(&*first, &*d_first, n, f);
     } else {
         std::transform(first, last, d_first, f);  // 4-arg form is not routed -> no recursion
@@ -442,7 +450,7 @@ OutIt transform(Policy&&, InIt first, InIt last, OutIt d_first, F f) {
 template <class Policy, class It, class T>
 T reduce(Policy&&, It first, It last, T init) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         if (n == 0) return init;
         // Reduce in the ELEMENT type on the GPU (identity 0), then host-combine the
         // init. Keeps the kernel monomorphic in the element type even when the init type
@@ -461,7 +469,7 @@ T reduce(Policy&&, It first, It last, T init) {
 template <class Policy, class It, class V>
 void fill(Policy&&, It first, It last, const V& value) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         using E = typename std::iterator_traits<It>::value_type;
         if (n) { E v = static_cast<E>(value); detail::device_invoke(&*first, n, [v](E& x){ x = v; }); }
     } else {
@@ -476,7 +484,7 @@ void fill(Policy&&, It first, It last, const V& value) {
 template <class Policy, class It, class Gen>
 void generate(Policy&&, It first, It last, Gen gen) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         using E = typename std::iterator_traits<It>::value_type;
         if (n) detail::device_invoke(&*first, n, [gen](E& x){ x = gen(); });
     } else {
@@ -487,7 +495,7 @@ void generate(Policy&&, It first, It last, Gen gen) {
 template <class Policy, class It>
 void sort(Policy&&, It first, It last) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         if (n) detail::device_sort(&*first, n);
     } else {
         std::sort(first, last);  // 2-arg form is not routed -> no recursion
@@ -497,7 +505,7 @@ void sort(Policy&&, It first, It last) {
 template <class Policy, class It, class OutIt>
 OutIt inclusive_scan(Policy&&, It first, It last, OutIt d_first) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It, OutIt>) {
         if (n) detail::device_scan(&*first, &*d_first, n);
     } else {
         std::inclusive_scan(first, last, d_first);  // 3-arg form is not routed
@@ -511,7 +519,7 @@ OutIt inclusive_scan(Policy&&, It first, It last, OutIt d_first) {
 template <class Policy, class It, class OutIt, class T>
 OutIt exclusive_scan(Policy&&, It first, It last, OutIt d_first, T init) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It, OutIt>) {
         using E = typename std::iterator_traits<It>::value_type;
         if (n) detail::device_exclusive_scan(&*first, &*d_first, n, static_cast<E>(init));
     } else {
@@ -523,7 +531,7 @@ OutIt exclusive_scan(Policy&&, It first, It last, OutIt d_first, T init) {
 template <class Policy, class It, class T, class BinOp, class UnOp>
 T transform_reduce(Policy&&, It first, It last, T init, BinOp bop, UnOp uop) {
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         // MVP: default '+' combine; reduce the transform output type U on the GPU and
         // host-combine init (so T may differ from U, e.g. float elements -> double init).
         using E = typename std::iterator_traits<It>::value_type;
@@ -542,7 +550,7 @@ count_if(Policy&&, It first, It last, Pred pred) {
     using D = typename std::iterator_traits<It>::difference_type;
     using E = typename std::iterator_traits<It>::value_type;
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         return n ? static_cast<D>(detail::device_count_if<E, Pred>(&*first, n, pred)) : D{};
     } else {
         return std::count_if(first, last, pred);  // 3-arg form not routed
@@ -574,7 +582,7 @@ template <class Policy, class It, class OutIt, class Pred>
 OutIt copy_if(Policy&&, It first, It last, OutIt d_first, Pred pred) {
     using D = typename std::iterator_traits<OutIt>::difference_type;
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It, OutIt>) {
         using E = typename std::iterator_traits<It>::value_type;
         std::size_t kept = n ? detail::device_copy_if<E, Pred>(&*first, &*d_first, n, pred) : 0;
         return std::next(d_first, static_cast<D>(kept));
@@ -587,7 +595,7 @@ template <class Policy, class It, class Pred>
 It remove_if(Policy&&, It first, It last, Pred pred) {
     using D = typename std::iterator_traits<It>::difference_type;
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         using E = typename std::iterator_traits<It>::value_type;
         std::size_t kept = n ? detail::device_remove_if<E, Pred>(&*first, n, pred) : 0;
         return std::next(first, static_cast<D>(kept));
@@ -600,7 +608,7 @@ template <class Policy, class It, class Pred>
 It partition(Policy&&, It first, It last, Pred pred) {
     using D = typename std::iterator_traits<It>::difference_type;
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         using E = typename std::iterator_traits<It>::value_type;
         std::size_t nt = n ? detail::device_partition<E, Pred>(&*first, n, pred) : 0;
         return std::next(first, static_cast<D>(nt));
@@ -613,7 +621,7 @@ template <class Policy, class It>
 It unique(Policy&&, It first, It last) {
     using D = typename std::iterator_traits<It>::difference_type;
     auto n = static_cast<std::size_t>(std::distance(first, last));
-    if constexpr (detail::is_offload_policy_v<Policy>) {
+    if constexpr (detail::offload_ok_v<Policy, It>) {
         using E = typename std::iterator_traits<It>::value_type;
         std::size_t kept = n ? detail::device_unique<E>(&*first, n) : 0;
         return std::next(first, static_cast<D>(kept));

@@ -116,6 +116,29 @@ void parallax_kernel_launch_with_captures(
 }
 #endif
 
+#ifdef __cplusplus
+/* Phase 9: compile-time contiguity test used by generated collector replacements to gate
+ * the device path. The device replacements read the whole range through &*first as a raw
+ * pointer, which assumes contiguous storage; for non-contiguous iterators (std::deque,
+ * std::list, …) the generated code falls back to the serial std:: call rather than
+ * mis-reading one memory block. C++20 uses the std::contiguous_iterator concept; older
+ * standards conservatively treat only raw pointers as contiguous (container iterators then
+ * fall back to CPU — correct, just not offloaded). */
+#include <iterator>
+#include <type_traits>
+namespace parallax {
+#if __cplusplus >= 202002L
+template <class It>
+inline constexpr bool is_contiguous_iterator_v =
+    std::contiguous_iterator<std::remove_cvref_t<It>>;
+#else
+template <class It>
+inline constexpr bool is_contiguous_iterator_v =
+    std::is_pointer_v<std::remove_reference_t<It>>;
+#endif
+}  // namespace parallax
+#endif /* __cplusplus */
+
 #endif /* PARALLAX_RUNTIME_H */
 
 /* Register external buffer (e.g., from std::vector) for GPU use */
